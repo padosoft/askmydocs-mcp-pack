@@ -1,0 +1,59 @@
+{
+    "name": "padosoft/askmydocs-mcp-pack",
+    "description": "Framework-agnostic MCP (Model Context Protocol) plumbing for Laravel — contracts, multi-turn tool-calling orchestrator, stdio client bridge, audit trail, RBAC hooks. Powers AskMyDocs and reusable in any Laravel AI app.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "laravel",
+        "mcp",
+        "model-context-protocol",
+        "ai",
+        "tool-calling",
+        "agentic",
+        "claude",
+        "cursor",
+        "openai",
+        "padosoft"
+    ],
+    "authors": [
+        {"name": "Padosoft"}
+    ],
+    "require": {
+        "php": "^8.3",
+        "ext-json": "*",
+        "illuminate/support": "^11.0|^12.0|^13.0",
+        "illuminate/database": "^11.0|^12.0|^13.0",
+        "illuminate/contracts": "^11.0|^12.0|^13.0",
+        "illuminate/console": "^11.0|^12.0|^13.0",
+        "illuminate/events": "^11.0|^12.0|^13.0",
+        "illuminate/http": "^11.0|^12.0|^13.0",
+        "symfony/process": "^7.0|^8.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^9.0|^10.0|^11.0",
+        "phpunit/phpunit": "^10.5|^11.0|^12.0",
+        "mockery/mockery": "^1.6"
+    },
+    "autoload": {
+        "psr-4": {
+            "Padosoft\\AskMyDocsMcpPack\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Padosoft\\AskMyDocsMcpPack\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Padosoft\\AskMyDocsMcpPack\\AskMyDocsMcpPackServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "scripts": {
+        "test": "vendor/bin/phpunit"
+    }
+}
