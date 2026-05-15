@@ -10,15 +10,24 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- The `create_mcp_tool_call_audit_table` migration now guards on
-  `Schema::hasTable('mcp_tool_call_audit')`. When a host already
-  manages its own audit table (e.g. AskMyDocs v5.0+, which shipped a
-  v5.0 audit migration before extracting this pack), running
-  `php artisan migrate` after `composer require` previously failed
-  with "table already exists". The guard makes the migration a no-op
-  in that scenario; hosts ALTER their existing table to add the
-  `input_hash` + `actor` columns the package writes and point
-  `mcp-pack.audit_model` at a subclass that satisfies both schemas.
+- The `create_mcp_tool_call_audit_table` migration now guards both
+  `up()` and `down()` on the existing schema. `up()` returns early
+  when `Schema::hasTable('mcp_tool_call_audit')` is already true
+  (previously `php artisan migrate` failed with "table already
+  exists" when the package was installed on top of a host that
+  predated it). `down()` is symmetric: it skips the `dropIfExists`
+  when the table carries any host-owned columns
+  (`input_json_redacted`, `user_id`, `error_json`) so a future
+  rollback cannot erase the operator's audit data.
+
+  Hosts are expected to ALTER their existing table to add the
+  `input_hash` + `actor` columns the package writes and to point
+  `mcp-pack.audit_model` at a subclass that satisfies both schemas
+  (Recipe 5 in the README).
+
+## [1.0.0] — 2026-05-15
+
+### Added
 
 
 ### Added

@@ -480,6 +480,77 @@ new InMemoryMcpServer(
 );
 ```
 
+### Recipe 5 — coexist with a host-owned audit table
+
+If your host already owns a `mcp_tool_call_audit` table that pre-dates
+this pack, the package migration is a no-op
+(`Schema::hasTable('mcp_tool_call_audit')` guards both `up()` and
+`down()`). To keep the host's operator-forensics columns (raw redacted
+payload, user-FK, error blob, …) AND satisfy the package contract,
+ship ONE additive host migration and one model subclass:
+
+```php
+// database/migrations/...add_input_hash_and_actor_to_mcp_tool_call_audit.php
+Schema::table('mcp_tool_call_audit', function (Blueprint $table) {
+    $table->char('input_hash', 64)->nullable()->after('input_json_redacted');
+    $table->string('actor', 100)->nullable()->after('user_id');
+    // (also relax any NOT NULL host columns the package does not write)
+});
+
+// Backfill existing rows so SHA-256 lookups match pre- and post-pack:
+DB::table('mcp_tool_call_audit')
+    ->whereNull('input_hash')
+    ->orderBy('id')
+    ->chunkById(500, function ($rows) {
+        foreach ($rows as $row) {
+            $payload = is_array($row->input_json_redacted)
+                ? json_encode($row->input_json_redacted, JSON_UNESCAPED_UNICODE)
+                : $row->input_json_redacted;
+            DB::table('mcp_tool_call_audit')
+                ->where('id', $row->id)
+                ->update(['input_hash' => hash('sha256', (string) $payload)]);
+        }
+    });
+```
+
+```php
+// app/Models/McpToolCallAudit.php — subclass + bridging hook
+class McpToolCallAudit extends \Padosoft\AskMyDocsMcpPack\Models\McpToolCallAudit
+{
+    protected $table = 'mcp_tool_call_audit';
+
+    protected $fillable = [
+        // package contract
+        'tenant_id', 'actor', 'mcp_server_id', 'tool_name',
+        'input_hash', 'result_hash', 'duration_ms', 'status', 'error_excerpt',
+        // host-legacy columns kept for admin SPA
+        'user_id', 'input_json_redacted', 'error_json',
+    ];
+
+    protected static function booted(): void
+    {
+        static::creating(function (self $row) {
+            // Bridge actor↔user_id so legacy joins still work.
+            if ($row->user_id === null && is_string($row->actor) && ctype_digit($row->actor)) {
+                $row->user_id = (int) $row->actor;
+            }
+            if (($row->actor === null || $row->actor === '') && $row->user_id !== null) {
+                $row->actor = (string) $row->user_id;
+            }
+        });
+    }
+}
+```
+
+```php
+// config/mcp-pack.php — point the package at the host subclass
+return ['audit_model' => \App\Models\McpToolCallAudit::class];
+```
+
+Now every package `ToolInvoker::audit()` row fills BOTH schemas; legacy
+host writes continue to work; the host's existing admin UI and
+operator-forensics queries keep rendering the same way they always did.
+
 ---
 
 ## Extension points
