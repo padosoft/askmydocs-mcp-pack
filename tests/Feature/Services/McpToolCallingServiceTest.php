@@ -54,6 +54,19 @@ class McpToolCallingServiceTest extends TestCase
         parent::tearDown();
     }
 
+    public function test_short_circuits_when_config_kill_switch_is_off(): void
+    {
+        config()->set('mcp-pack.tool_calling.enabled', false);
+        $this->host->script[] = new HostChatResponse('plain answer', []);
+
+        $service = $this->app->make(McpToolCallingService::class);
+        $response = $service->chatWithTools([HostMessage::user('hi')], tenantId: 'acme');
+
+        $this->assertSame('plain answer', $response->content);
+        $this->assertCount(1, $this->host->seenTurns);
+        $this->assertSame([], $this->host->seenTurns[0]->tools, 'no tool catalog should be built when the kill-switch is off');
+    }
+
     public function test_short_circuits_when_provider_lacks_tool_support(): void
     {
         $this->host->supportsTools = false;

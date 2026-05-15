@@ -73,13 +73,19 @@ class ToolInvoker
         float $latencyMs,
         array $context,
     ): void {
-        if (! class_exists(McpToolCallAudit::class)) {
+        $modelClass = $this->resolveAuditModelClass();
+        if ($modelClass === null) {
             return;
         }
 
         try {
-            McpToolCallAudit::query()->create([
-                'tenant_id' => $context['tenant_id'] ?? $server->tenantId(),
+            $modelClass::query()->create([
+                // Coalesce null tenant id to the migration's 'default'
+                // sentinel — the column is NOT NULL with default
+                // 'default', and an explicit null would otherwise blow
+                // up under strict-mode databases and silently drop the
+                // audit row through the catch.
+                'tenant_id' => $context['tenant_id'] ?? $server->tenantId() ?? 'default',
                 'actor' => isset($context['actor']) ? (string) $context['actor'] : null,
                 'mcp_server_id' => $server->id(),
                 'mcp_server_name' => $server->name(),
@@ -98,5 +104,25 @@ class ToolInvoker
             // Audit logging MUST NEVER break the user path. Swallow
             // and let the orchestrator continue.
         }
+    }
+
+    /**
+     * Honour the `mcp-pack.audit_model` override so hosts can subclass
+     * the audit model and add per-host columns without forking the
+     * pack.
+     *
+     * @return class-string<\Illuminate\Database\Eloquent\Model>|null
+     */
+    protected function resolveAuditModelClass(): ?string
+    {
+        $configured = null;
+        if (function_exists('config')) {
+            $configured = config('mcp-pack.audit_model');
+        }
+        $class = is_string($configured) && $configured !== ''
+            ? $configured
+            : McpToolCallAudit::class;
+
+        return class_exists($class) ? $class : null;
     }
 }

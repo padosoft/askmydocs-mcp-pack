@@ -11,9 +11,12 @@ namespace Padosoft\AskMyDocsMcpPack\Contracts;
  * tool catalog at request time, and dispatches `invoke($arguments)`
  * when the model returns a tool_call referencing (a).
  *
- * Tools MUST be deterministic per `(name, arguments)` pair when
- * `isIdempotent()` returns true — the orchestrator relies on that to
- * coalesce duplicate calls within a single multi-turn session.
+ * Tools SHOULD be deterministic per `(name, arguments)` pair when
+ * `isIdempotent()` returns true. The v1.0 orchestrator does not
+ * coalesce duplicate calls within a single multi-turn session — the
+ * flag is informational, exposed to authorizers and host bridges that
+ * want to make smarter prompting decisions. Automatic de-duplication
+ * lands in v1.1 (see Roadmap in the README).
  */
 interface McpToolContract
 {
@@ -43,6 +46,10 @@ interface McpToolContract
      * Whether two calls with identical arguments return the same
      * result. Read-only retrieval tools should return true; tools
      * that mutate state MUST return false.
+     *
+     * The v1.0 orchestrator does not act on this flag automatically;
+     * authorizers and host bridges may consult it to inform prompting
+     * decisions.
      */
     public function isIdempotent(): bool;
 

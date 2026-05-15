@@ -7,7 +7,8 @@ namespace Padosoft\AskMyDocsMcpPack\Contracts;
  * connect to via stdio (Claude Desktop / Cursor / VS Code) or HTTP
  * (cloud MCP gateway).
  *
- * The package ships an in-memory default ({@see InMemoryMcpServerRegistry});
+ * The package ships an in-memory default
+ * ({@see \Padosoft\AskMyDocsMcpPack\Defaults\InMemoryMcpServerRegistry});
  * production hosts typically back it with a per-tenant Eloquent
  * model so DPO operators can rotate credentials without re-deploying.
  */
@@ -31,7 +32,8 @@ interface McpServerContract
     /**
      * Transport-specific configuration. For `stdio`: keys `command`,
      * `args`, `cwd`, `env`. For `http`: keys `endpoint`, `headers`.
-     * The orchestrator passes this verbatim to {@see McpClientBridge}.
+     * Passed verbatim into the transport instance built by
+     * {@see \Padosoft\AskMyDocsMcpPack\Services\McpClient::forServer()}.
      *
      * @return array<string,mixed>
      */

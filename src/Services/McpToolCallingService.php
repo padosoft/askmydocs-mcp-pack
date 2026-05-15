@@ -52,6 +52,12 @@ class McpToolCallingService
         array $extras = [],
         array $context = [],
     ): HostChatResponse {
+        // Master kill-switch — when tool calling is disabled at config
+        // level, fall through to a plain host chat with no catalog.
+        if (function_exists('config') && ! config('mcp-pack.tool_calling.enabled', true)) {
+            return $this->host->chat(new HostChatTurn($messages, [], $tenantId, $extras));
+        }
+
         if (! $this->host->supportsToolCalling()) {
             return $this->host->chat(new HostChatTurn($messages, [], $tenantId, $extras));
         }

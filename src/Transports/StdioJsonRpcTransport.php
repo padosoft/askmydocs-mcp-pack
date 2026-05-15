@@ -5,7 +5,6 @@ namespace Padosoft\AskMyDocsMcpPack\Transports;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpTransportContract;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpTransportException;
 use Padosoft\AskMyDocsMcpPack\Support\JsonRpcMessage;
-use Symfony\Component\Process\Exception\ProcessFailedException;
 use Symfony\Component\Process\Process;
 
 /**
@@ -19,15 +18,27 @@ use Symfony\Component\Process\Process;
  *   - cwd:     string|null — working directory
  *   - env:     array<string,string>|null — environment variables
  *   - timeout_ms: int — per-request timeout (default 10_000)
- *   - boot_grace_ms: int — milliseconds to wait for the child to come
- *                    up before issuing the first request (default 250)
  *
- * The transport is single-shot per request: it spawns, sends, reads
- * one matching response, terminates. This trades per-call latency
- * for connection-pool simplicity — fine for low-throughput admin
- * tooling, NOT recommended for chat-time tool-calling under load.
- * Hosts that need persistent stdio should subclass and keep the
- * Process open across requests.
+ * ## v1.0 limitation — single-shot per request
+ *
+ * The transport spawns a fresh child process for EACH JSON-RPC
+ * request (initialize, tools/list, tools/call …) and closes stdin
+ * right after the message goes out. This is correct for stateless
+ * MCP servers (filesystem, public-API wrappers) but the canonical
+ * MCP spec defines stdio as a persistent session where `initialize`
+ * + `initialized` set up state that `tools/list` and `tools/call`
+ * rely on. Stateful servers — including many official reference
+ * implementations — will refuse to respond to a second message
+ * because their internal state machine is back at the start.
+ *
+ * For v1.0 we recommend the HTTP transport for production
+ * tool-calling workloads, OR subclassing this transport to keep the
+ * Process open across requests. Persistent stdio sessions land in
+ * v1.1 (see Roadmap in the README).
+ *
+ * Hosts that need persistent stdio today should subclass and
+ * override {@see makeProcess()} / hold a single Process across
+ * `request()` calls.
  */
 class StdioJsonRpcTransport implements McpTransportContract
 {
@@ -45,7 +56,10 @@ class StdioJsonRpcTransport implements McpTransportContract
             $process->setInput($request->toJson() . "\n");
             $process->setTimeout($this->timeoutSeconds());
             $process->run();
-        } catch (ProcessFailedException $e) {
+        } catch (\Throwable $e) {
+            // Catches ProcessFailedException, ProcessTimedOutException,
+            // and any other Symfony Process exception — keeps the
+            // transport contract consistent.
             throw new McpTransportException("Stdio MCP transport process failed: {$e->getMessage()}", 0, $e);
         }
 
@@ -71,10 +85,20 @@ class StdioJsonRpcTransport implements McpTransportContract
         }
 
         $process = $this->makeProcess();
-        $process->setInput($notification->toJson() . "\n");
-        $process->setTimeout($this->timeoutSeconds());
-        $process->run();
-        // notifications have no response — exit code is the only signal
+        try {
+            $process->setInput($notification->toJson() . "\n");
+            $process->setTimeout($this->timeoutSeconds());
+            $process->run();
+        } catch (\Throwable $e) {
+            throw new McpTransportException("Stdio MCP transport notify failed: {$e->getMessage()}", 0, $e);
+        }
+
+        if (! $process->isSuccessful()) {
+            throw new McpTransportException(
+                "Stdio MCP transport notify exited non-zero ({$process->getExitCode()}): "
+                . $process->getErrorOutput(),
+            );
+        }
     }
 
     public function isHealthy(): bool

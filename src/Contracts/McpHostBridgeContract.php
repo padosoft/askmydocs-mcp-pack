@@ -17,8 +17,9 @@ use Padosoft\AskMyDocsMcpPack\Support\HostChatTurn;
  *
  * Idempotency hint: `chat()` SHOULD be deterministic when the model
  * temperature is 0 and the host's caller passes `seed` through the
- * extras map — the orchestrator uses that to coalesce duplicate
- * tool-call payloads inside a single session.
+ * extras map. The v1.0 orchestrator does not coalesce duplicate
+ * tool-call payloads automatically — the hint is for hosts that want
+ * to layer their own dedupe / cache in front of the bridge.
  */
 interface McpHostBridgeContract
 {

@@ -7,8 +7,8 @@ use Padosoft\AskMyDocsMcpPack\Contracts\McpToolContract;
 
 /**
  * Default authorizer that allows everything. Production hosts MUST
- * replace it via container binding — the service provider logs a
- * warning when the null authorizer is resolved in `production`.
+ * replace it via container binding — the orchestrator's RBAC gate is
+ * a no-op until the host wires its own implementation.
  */
 final class NullMcpToolAuthorizer implements McpToolAuthorizerContract
 {
