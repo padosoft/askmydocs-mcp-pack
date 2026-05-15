@@ -10,6 +10,7 @@ use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpHostBridge;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpToolAuthorizer;
 use Padosoft\AskMyDocsMcpPack\Services\McpHandshakeService;
 use Padosoft\AskMyDocsMcpPack\Services\McpToolCallingService;
+use Padosoft\AskMyDocsMcpPack\Tests\TestCase;
 
 class ServiceProviderTest extends TestCase
 {
