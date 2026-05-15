@@ -130,13 +130,20 @@ class ResilienceMediatorTest extends TestCase
         $this->assertSame(1, $called);
 
         // Second call: circuit is OPEN, mediator MUST NOT call upstream.
-        $this->expectException(CircuitOpenException::class);
-        $mediator->execute('t', 's', 'tool', static function () use (&$called) {
-            $called++;
-            return ['unreachable' => true];
-        });
+        try {
+            $mediator->execute('t', 's', 'tool', static function () use (&$called) {
+                $called++;
+                return ['unreachable' => true];
+            });
+            $this->fail('expected CircuitOpenException');
+        } catch (CircuitOpenException $e) {
+            $this->assertSame('s', $e->serverId);
+            $this->assertSame('tool', $e->toolName);
+        }
 
-        // verified in finally below
+        // The upstream MUST NOT have been invoked the second time —
+        // short-circuit is the whole point of an OPEN breaker.
+        $this->assertSame(1, $called, 'upstream invoked while circuit was OPEN');
     }
 
     public function test_non_transport_exceptions_are_not_retried(): void
@@ -201,6 +208,52 @@ class ResilienceMediatorTest extends TestCase
         $mediator->execute('t', 's', 'tool', function () use (&$attempts): void {
             $attempts++;
         });
+    }
+
+    public function test_max_attempts_one_does_not_fire_retry_exhausted(): void
+    {
+        // When effectiveMaxAttempts === 1 no retry was ever
+        // attempted; RetryExhausted is retry-layer telemetry and
+        // would mislead dashboards counting retries — suppress it.
+        Event::fake([RetryExhausted::class]);
+        $cache = Cache::store();
+        $events = $this->app['events'];
+        $mediator = new ResilienceMediator(
+            breaker: new CircuitBreaker($cache, $events, failureThreshold: 99, recoverySeconds: 30),
+            budget: new RetryBudget($cache, bucketSize: 99, windowSeconds: 60),
+            events: $events,
+            maxAttempts: 1,
+            baseBackoffMs: 100,
+            maxBackoffMs: 1000,
+            sleep: static fn(int $ms) => null,
+            breakerEnabled: false,
+            retryEnabled: true,
+        );
+
+        try {
+            $mediator->execute('t', 's', 'tool', static function (): void {
+                throw new McpTransportException('first-shot fail');
+            });
+        } catch (McpTransportException) {
+        }
+        Event::assertNotDispatched(RetryExhausted::class);
+    }
+
+    public function test_circuit_open_exception_forwards_code_and_previous(): void
+    {
+        $prev = new \RuntimeException('root cause');
+        $e = new \Padosoft\AskMyDocsMcpPack\Exceptions\CircuitOpenException(
+            message: 'open',
+            serverId: 's',
+            toolName: 'tool',
+            retryAfterSeconds: 5,
+            code: 42,
+            previous: $prev,
+        );
+
+        $this->assertSame(42, $e->getCode());
+        $this->assertSame($prev, $e->getPrevious());
+        $this->assertSame(5, $e->retryAfterSeconds);
     }
 
     public function test_retry_only_does_not_engage_breaker(): void

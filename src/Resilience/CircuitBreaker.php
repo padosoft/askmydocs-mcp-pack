@@ -15,9 +15,13 @@ use Padosoft\AskMyDocsMcpPack\Resilience\Events\CircuitOpened;
  *
  * State transitions:
  *
- *   CLOSED       — `recordFailure()` increments a sliding counter;
- *                  when consecutive failures cross `failureThreshold`
- *                  the breaker OPENs with TTL `recoverySeconds`.
+ *   CLOSED       — `recordFailure()` increments a strict CONSECUTIVE
+ *                  failure counter (zeroed only by `recordSuccess`,
+ *                  with no time-based decay — long quiet periods do
+ *                  NOT shrink it, the entry only resets when the
+ *                  cache key expires); when the counter reaches
+ *                  `failureThreshold` the breaker OPENs with TTL
+ *                  `recoverySeconds`.
  *
  *   OPEN         — `state()` returns OPEN until `openedAt + TTL`,
  *                  then auto-transitions to HALF_OPEN (one probe
@@ -57,9 +61,35 @@ final class CircuitBreaker
     }
 
     /**
+     * Read-only snapshot of the breaker state for dashboards /
+     * admin endpoints / logging. NEVER mutates the cache and NEVER
+     * fires events — calling this from a panel or log handler will
+     * NOT consume the half-open probe slot. Use this when you just
+     * need to observe the state; call {@see state()} when you want
+     * to participate in the state machine.
+     */
+    public function peekState(string $serverId, string $toolName): CircuitState
+    {
+        $entry = $this->load($serverId, $toolName);
+        $state = CircuitState::from($entry['state']);
+        if ($state !== CircuitState::OPEN) {
+            return $state;
+        }
+        $openedAt = (int) ($entry['opened_at'] ?? 0);
+        if ($openedAt > 0 && (time() - $openedAt) >= $this->recoverySeconds) {
+            return CircuitState::HALF_OPEN;
+        }
+        return CircuitState::OPEN;
+    }
+
+    /**
      * Current state, applying the OPEN → HALF_OPEN auto-transition
      * lazily so callers never see a stale OPEN past the recovery
-     * window. Persists the transition + fires `CircuitHalfOpened`.
+     * window. **Has a side effect**: when the recovery TTL has
+     * elapsed this MUTATES the cache to HALF_OPEN and fires
+     * `CircuitHalfOpened`. Intended for the resilience call path
+     * (`allowsCall()` + the mediator); for read-only inspection
+     * call {@see peekState()} instead.
      */
     public function state(string $serverId, string $toolName): CircuitState
     {
@@ -132,9 +162,13 @@ final class CircuitBreaker
 
         // HALF_OPEN probe failure immediately re-opens, regardless
         // of the consecutive-failure counter — the failing probe IS
-        // the evidence we need.
+        // the evidence we need. Preserve the cumulative failure
+        // count from the previous OPEN so the `CircuitOpened` event
+        // payload still tells operators how many failures led to the
+        // original outage instead of resetting to "1" each probe.
         if ($state === CircuitState::HALF_OPEN) {
-            $this->open($serverId, $toolName, $entry, 1, $error);
+            $previousCount = (int) ($entry['failure_count'] ?? 1);
+            $this->open($serverId, $toolName, $entry, max(1, $previousCount + 1), $error);
             return;
         }
 

@@ -103,6 +103,16 @@ final class ResilienceMediator
         $attempts = 0;
         $lastError = null;
 
+        // Any non-transport throwable thrown by `$call()` bubbles
+        // out of the catch unchanged — we do not record breaker
+        // failures or consume the retry budget for application
+        // exceptions (caller bugs, validation, etc). The breaker
+        // can therefore stay in HALF_OPEN when a probe surfaced a
+        // non-transport error; this is intentional: such errors
+        // tell us NOTHING about the upstream's transport health,
+        // so neither closing nor re-opening would be honest. The
+        // next genuine transport call (success or transport
+        // failure) advances the state machine.
         while (true) {
             $attempts++;
             try {
@@ -118,7 +128,13 @@ final class ResilienceMediator
                     if ($this->breakerEnabled) {
                         $this->breaker->recordFailure($serverId, $toolName, $lastError);
                     }
-                    if ($this->retryEnabled) {
+                    // RetryExhausted is telemetry for the retry
+                    // layer; suppress it when no retry was ever
+                    // attempted (effectiveMaxAttempts === 1, i.e.
+                    // retries disabled OR config sets it to 1) so
+                    // dashboards counting retry exhaustions don't
+                    // double-count first-shot failures.
+                    if ($this->retryEnabled && $effectiveMaxAttempts > 1) {
                         $this->events->dispatch(new RetryExhausted(
                             tenantId: $tenantId,
                             serverId: $serverId,
@@ -158,16 +174,18 @@ final class ResilienceMediator
                 ($this->sleep)($backoff);
                 // Loop and retry.
             }
-            // Any non-transport throwable bubbles out unchanged —
-            // we do not record breaker failures for application
-            // exceptions (caller bugs, validation, etc).
         }
     }
 
     private function backoffMs(int $attempt): int
     {
-        // attempt is 1-indexed; first retry waits exactly base.
-        $raw = $this->baseBackoffMs * (1 << ($attempt - 1));
+        // attempt is 1-indexed; first retry waits exactly `base`.
+        // Clamp the exponent at 30 so the bit-shift never overflows
+        // PHP_INT_MAX on 32-bit-int builds (1 << 31 turns negative)
+        // even if an operator configures a pathological maxAttempts.
+        // The min() against $maxBackoffMs caps the practical value.
+        $exponent = min(max(0, $attempt - 1), 30);
+        $raw = $this->baseBackoffMs * (1 << $exponent);
         return (int) min($raw, $this->maxBackoffMs);
     }
 }

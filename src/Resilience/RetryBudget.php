@@ -37,9 +37,17 @@ final class RetryBudget
     /**
      * Attempt to consume one token. Returns true if the budget had
      * room; false when depleted (the caller MUST stop retrying and
-     * surface the underlying error). NOT atomic across distributed
-     * caches — the worst case under racing workers is a small
-     * over-spend, never under-counting.
+     * surface the underlying error).
+     *
+     * **Concurrency note**: this is the canonical check-then-act
+     * pattern (`get` → mutate → `put`) and is NOT atomic across
+     * concurrent workers. Under racing decrements two workers can
+     * read the same value and write the same decremented result,
+     * which means a concurrent decrement can be LOST (double-spend)
+     * — not just over-counted. For workloads where this matters,
+     * point `mcp-pack.resilience.cache_store` at a Redis store and
+     * a future iteration can switch to `Cache::decrement()` for
+     * server-side atomic semantics.
      */
     public function tryConsume(string $tenantId, string $serverId): bool
     {

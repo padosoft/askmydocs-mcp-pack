@@ -134,6 +134,65 @@ class CircuitBreakerTest extends TestCase
         $this->assertSame(CircuitState::OPEN, $cb->state('srv', 'tool'));
     }
 
+    public function test_peek_state_is_pure_and_does_not_fire_events(): void
+    {
+        // peekState() MUST NOT mutate the cache or fire
+        // CircuitHalfOpened — dashboards / log handlers can read
+        // it freely without consuming the half-open probe slot.
+        Event::fake([CircuitHalfOpened::class]);
+        $cb = $this->makeBreaker(threshold: 1, recovery: 1);
+
+        $cb->recordFailure('srv', 'tool');
+        $reflection = new \ReflectionClass($cb);
+        $cacheKeyMethod = $reflection->getMethod('cacheKey');
+        $cacheKeyMethod->setAccessible(true);
+        $key = $cacheKeyMethod->invoke($cb, 'srv', 'tool');
+        $entry = Cache::get($key);
+        $entry['opened_at'] = time() - 5;
+        Cache::put($key, $entry, 3600);
+
+        // peekState() reports HALF_OPEN but does NOT persist or fire.
+        $this->assertSame(CircuitState::HALF_OPEN, $cb->peekState('srv', 'tool'));
+        $this->assertSame('open', Cache::get($key)['state'], 'cache must NOT be mutated by peekState');
+        Event::assertNotDispatched(CircuitHalfOpened::class);
+
+        // state() does both: transitions the cache + fires the event.
+        $this->assertSame(CircuitState::HALF_OPEN, $cb->state('srv', 'tool'));
+        $this->assertSame('half_open', Cache::get($key)['state']);
+        Event::assertDispatched(CircuitHalfOpened::class);
+    }
+
+    public function test_half_open_re_open_preserves_cumulative_failure_count(): void
+    {
+        // CircuitOpened on the probe-fail re-open carries the
+        // cumulative count, not just "1 failure", so operators
+        // alerting on the event don't see deceptive payloads.
+        $captured = null;
+        $this->app['events']->listen(
+            CircuitOpened::class,
+            function (CircuitOpened $e) use (&$captured): void { $captured = $e; },
+        );
+        $cb = $this->makeBreaker(threshold: 3, recovery: 1);
+
+        $cb->recordFailure('srv', 'tool');
+        $cb->recordFailure('srv', 'tool');
+        $cb->recordFailure('srv', 'tool'); // OPEN — first event, count=3
+
+        $reflection = new \ReflectionClass($cb);
+        $cacheKeyMethod = $reflection->getMethod('cacheKey');
+        $cacheKeyMethod->setAccessible(true);
+        $key = $cacheKeyMethod->invoke($cb, 'srv', 'tool');
+        $entry = Cache::get($key);
+        $entry['opened_at'] = time() - 5;
+        Cache::put($key, $entry, 3600);
+        $cb->state('srv', 'tool'); // → HALF_OPEN
+
+        $cb->recordFailure('srv', 'tool', 'probe failed'); // re-OPEN
+
+        $this->assertNotNull($captured);
+        $this->assertGreaterThanOrEqual(3, $captured->failureCount, 'cumulative count preserved on re-open');
+    }
+
     public function test_state_is_isolated_per_tool(): void
     {
         $cb = $this->makeBreaker(threshold: 1, recovery: 60);

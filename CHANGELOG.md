@@ -65,16 +65,21 @@ circuit the operator did not enable.
 
 ### Tests
 
-- **91 tests / 227 assertions** all green (was 70/173 in v1.2.0).
-  +21 tests across `CircuitBreakerTest` (7 cases),
+- **95 tests / 242 assertions** all green (was 70/173 in v1.2.0).
+  +25 tests across `CircuitBreakerTest` (9 cases),
   `RetryBudgetTest` (5 cases), and `ResilienceMediatorTest`
-  (9 cases) covering state transitions, threshold open, TTL roll
+  (11 cases) covering state transitions, threshold open, TTL roll
   to half-open, success-resets-counter, probe-fail re-opens,
   tenant + server budget isolation, window-rollover refill,
   retry-then-success, max-attempts exhausted, budget-depleted
   abort, open-circuit short-circuit, non-transport exceptions
   not retried, backoff capping, breaker-only does NOT retry
-  transport failures, retry-only does NOT engage the breaker.
+  transport failures, retry-only does NOT engage the breaker,
+  `peekState()` is pure (no cache mutation, no events),
+  HALF_OPEN re-open preserves cumulative failure count in the
+  `CircuitOpened` event payload, `maxAttempts === 1` does NOT
+  fire misleading `RetryExhausted` telemetry, and
+  `CircuitOpenException` forwards `$code` + `$previous`.
 
 ### Compatibility
 

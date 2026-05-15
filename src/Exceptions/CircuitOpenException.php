@@ -20,7 +20,9 @@ class CircuitOpenException extends McpTransportException
         public readonly string $serverId,
         public readonly string $toolName,
         public readonly int $retryAfterSeconds,
+        int $code = 0,
+        ?\Throwable $previous = null,
     ) {
-        parent::__construct($message);
+        parent::__construct($message, $code, $previous);
     }
 }
