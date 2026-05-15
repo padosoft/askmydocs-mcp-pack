@@ -24,6 +24,19 @@ class McpHandshakeService
     ) {}
 
     /**
+     * Return the cached handshake payload WITHOUT touching the
+     * upstream, or null when nothing is cached. Useful for admin
+     * endpoints that want to distinguish a real cache hit from a
+     * silent re-fetch — `refresh(force=false)` would mask the miss.
+     *
+     * @return array{capabilities:array<string,mixed>,tools:array<int,array<string,mixed>>}|null
+     */
+    public function peek(McpServerContract $server): ?array
+    {
+        return $this->hydrate($server);
+    }
+
+    /**
      * @return array{capabilities:array<string,mixed>,tools:array<int,array<string,mixed>>}
      */
     public function refresh(McpServerContract $server, bool $force = false): array

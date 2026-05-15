@@ -95,6 +95,38 @@ return [
     | default application cache cannot evict it under memory pressure.
     |
     */
+    /*
+    |--------------------------------------------------------------------------
+    | v1.4.0 — Admin REST backend
+    |--------------------------------------------------------------------------
+    |
+    | Registers a small read-mostly REST surface under the configured
+    | prefix (default `api/admin/mcp-pack`):
+    |
+    |   GET  servers
+    |   GET  servers/{id}
+    |   POST servers/{id}/handshake
+    |   GET  servers/{id}/tools
+    |   GET  audit
+    |   GET  circuit-breaker
+    |
+    | These routes are the backend the separate
+    | `padosoft/askmydocs-mcp-pack-admin` SPA consumes — the package
+    | itself ships NO frontend. Auth is host-driven: declare the
+    | middleware stack here (Sanctum + RBAC + role gate) and the
+    | controllers stay free of authorisation logic.
+    |
+    | Disabled by default — opt in once the auth stack is correct.
+    |
+    */
+    'admin' => [
+        'enabled' => env('MCP_PACK_ADMIN_ENABLED', false),
+        'prefix' => env('MCP_PACK_ADMIN_PREFIX', 'api/admin/mcp-pack'),
+        'middleware' => array_values(array_filter(
+            array_map('trim', explode(',', (string) env('MCP_PACK_ADMIN_MIDDLEWARE', 'api'))),
+        )),
+    ],
+
     'resilience' => [
         'circuit_breaker' => [
             'enabled' => env('MCP_PACK_CB_ENABLED', false),

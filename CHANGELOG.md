@@ -6,6 +6,99 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-05-15
+
+### Added — admin REST backend
+
+A small read-mostly REST surface the standalone
+`padosoft/askmydocs-mcp-pack-admin` SPA (post-v7.0 cycle) consumes.
+The package itself ships NO frontend — auth is host-driven; the
+package wires the routes only when `MCP_PACK_ADMIN_ENABLED=true`.
+
+- **`GET /api/admin/mcp-pack/servers`** — list `McpServerContract`
+  entries visible to the active tenant.
+- **`GET /api/admin/mcp-pack/servers/{id}`** — show one server,
+  with tenant-boundary enforcement (R30).
+- **`POST /api/admin/mcp-pack/servers/{id}/handshake?force=0|1`** —
+  trigger `McpHandshakeService::refresh()`; returns the cached
+  capabilities + tool catalog, or **502** with
+  `error.code=handshake_failed` on `McpTransportException`.
+- **`GET /api/admin/mcp-pack/servers/{id}/tools`** — list tools
+  from the cached handshake (the catalog filters by
+  `allowedTools()` when the server configures it).
+- **`GET /api/admin/mcp-pack/audit`** — paginated audit query with
+  filters `server_id`, `tool_name`, `status`, `from`, `to`,
+  `per_page` (clamped 1..200). Tenant-scoped automatically via the
+  trusted middleware attribute / `data_get($user, 'tenant_id')`.
+  Returns the configurable `mcp-pack.audit_model` so host
+  subclasses surface their own columns transparently.
+- **`GET /api/admin/mcp-pack/circuit-breaker?server={id}&tool={name}?`** —
+  read-only inspection backed by `CircuitBreaker::peekState()` so
+  dashboards never consume the half-open probe slot. Omit `tool`
+  to sweep every entry in the server's `allowedTools()`.
+- **`Http\Admin\ServersController`** / **`AuditController`** /
+  **`CircuitBreakerController`** — three focused controllers,
+  each resolving the active tenant from
+  `$request->attributes->get('mcp_pack.tenant_id')` (R30: never
+  from a client header).
+- **New config block** `mcp-pack.admin.{enabled,prefix,middleware}`
+  via `MCP_PACK_ADMIN_*` env vars. Default prefix
+  `api/admin/mcp-pack`; default middleware `['api']`. Hosts wire
+  Sanctum + RBAC + role gates by overriding `middleware`.
+
+### Tenant-scoped lookups + accurate `cached` signal
+
+- All admin lookups select from `forTenant($tenantId)` first
+  (rather than `find($id)` + post-hoc boundary check), so two
+  tenants reusing the same server id surface their OWN entry
+  instead of seeing another tenant's row leak through to the
+  404 path.
+- `POST /servers/{id}/handshake` reports `cached: true` ONLY when
+  the handshake cache really hit before the call (new
+  `McpHandshakeService::peek()` probe before `refresh()`). The
+  previous shape derived `cached` from the `force` flag alone,
+  which lied about first-time non-cached handshakes.
+- `GET /circuit-breaker` in sweep mode falls back to the
+  handshake-cached catalog when `allowedTools()` is empty (the
+  "all advertised tools" mode), so the sweep is not silently
+  empty for servers that don't pre-filter.
+- `AuditController` validates that the configured
+  `mcp-pack.audit_model` is an Eloquent `Model` subclass before
+  calling `::query()` — a misconfigured FQCN now surfaces a clean
+  JSON 500 (`error.code = audit_model_missing`) instead of a
+  fatal "method not found" error.
+
+### Tests
+
+- **116 tests / 316 assertions** all green (was 95/242 in v1.3.0).
+  +21 tests across `ServersControllerTest` (9 cases),
+  `AuditControllerTest` (5 cases), and
+  `CircuitBreakerControllerTest` (7 cases) covering the trusted-
+  tenant-attribute path, tenant-boundary enforcement, missing /
+  unknown server 404, handshake force flag propagation,
+  transport-failure 502, tool filtering by `allowedTools`, audit
+  pagination + filters + per-page clamping, circuit-breaker
+  explicit-tool + sweep modes, breaker tenant boundary, AND four
+  iter-1 regression cases: tenant-scoped lookup under id reuse
+  (servers + circuit-breaker), accurate `cached` reporting,
+  sweep fallback to handshake cache, and non-Eloquent audit
+  model surfacing a clean 500.
+
+### Deferred to v1.5.0
+
+CRUD writes on the registry (`POST /servers`, `PATCH /servers/{id}`,
+`DELETE /servers/{id}`) require a writable
+`McpServerRegistryWriteContract` that doesn't exist yet — every
+host today persists servers in its own table (e.g. AskMyDocs's
+`mcp_servers` Eloquent model). v1.5.0 will add the contract +
+the corresponding routes.
+
+### Compatibility
+
+Drop-in extension on top of v1.3.x. Routes are disabled by
+default; opt in via `MCP_PACK_ADMIN_ENABLED=true` once the
+middleware stack is configured.
+
 ## [1.3.0] — 2026-05-15
 
 ### Added — resilience (circuit breaker + adaptive retry)
