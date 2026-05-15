@@ -101,7 +101,7 @@ final class JsonRpcMessage
 
     public function toJson(): string
     {
-        return json_encode($this->toArray(), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        return json_encode($this->toArray(), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
     }
 
     /** @param array<string,mixed> $payload */

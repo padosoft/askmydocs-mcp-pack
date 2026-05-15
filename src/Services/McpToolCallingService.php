@@ -67,10 +67,7 @@ class McpToolCallingService
             return $this->host->chat(new HostChatTurn($messages, [], $tenantId, $extras));
         }
 
-        $tools = array_values(array_map(
-            static fn(array $entry): McpToolContract => $entry['tool'],
-            $toolMap,
-        ));
+        $tools = $this->extractToolsFromMap($toolMap);
         $conversation = $messages;
 
         for ($i = 0; $i < $this->maxIterations; $i++) {
@@ -161,6 +158,21 @@ class McpToolCallingService
         }
 
         return $catalog;
+    }
+
+    /**
+     * Extracts the ordered, zero-indexed list of {@see McpToolContract} instances
+     * from the catalog map keyed by tool name.
+     *
+     * @param  array<string,array{tool:McpToolContract,server:McpServerContract}> $toolMap
+     * @return array<int,McpToolContract>
+     */
+    protected function extractToolsFromMap(array $toolMap): array
+    {
+        return array_values(array_map(
+            static fn(array $entry): McpToolContract => $entry['tool'],
+            $toolMap,
+        ));
     }
 
     /**
