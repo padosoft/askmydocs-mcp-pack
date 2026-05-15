@@ -56,6 +56,26 @@ class SseJsonRpcTransportTest extends TestCase
         $transport->request(JsonRpcMessage::request('rpc_x', 'tools/call'));
     }
 
+    public function test_request_throws_when_only_notifications_arrive_no_response_frame(): void
+    {
+        // Pure-notification stream — no frame carries `result`/`error`
+        // (only `method` + no `id`). The transport must NOT mistake a
+        // notification for the response and must surface the protocol
+        // violation as a transport error.
+        $body = "data: " . json_encode(['jsonrpc' => '2.0', 'method' => 'progress', 'params' => ['pct' => 10]]) . "\n\n"
+              . "data: " . json_encode(['jsonrpc' => '2.0', 'method' => 'log', 'params' => ['msg' => 'tick']]) . "\n\n";
+
+        Http::fake([
+            'sse.example.test/stream' => Http::response($body, 200, ['Content-Type' => 'text/event-stream']),
+        ]);
+
+        $transport = new SseJsonRpcTransport(['endpoint' => 'http://sse.example.test/stream']);
+
+        $this->expectException(McpTransportException::class);
+        $this->expectExceptionMessageMatches('/no matching JSON-RPC response frame/');
+        $transport->request(JsonRpcMessage::request('rpc_x', 'tools/call'));
+    }
+
     public function test_request_throws_on_non_2xx(): void
     {
         Http::fake([

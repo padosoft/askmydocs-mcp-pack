@@ -128,11 +128,19 @@ final class SseJsonRpcTransport implements McpTransportContract
             if (! is_array($decoded)) {
                 continue;
             }
-            // Skip notifications (no id, or id !== expected).
             if (($decoded['id'] ?? null) === $expectedId) {
                 return JsonRpcMessage::fromArray($decoded);
             }
-            if (isset($decoded['jsonrpc'])) {
+            // Fallback candidate: only consider response-shaped
+            // frames (those carrying `result` or `error`). A frame
+            // with `method` set and no `id` is a NOTIFICATION
+            // (progress, log, …) — never a substitute for the
+            // request's response, and returning it would mask a
+            // missing response with telemetry.
+            $isResponseShaped = isset($decoded['jsonrpc'])
+                && ! isset($decoded['method'])
+                && (array_key_exists('result', $decoded) || array_key_exists('error', $decoded));
+            if ($isResponseShaped) {
                 $candidate = $decoded;
             }
         }

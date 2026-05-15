@@ -32,10 +32,19 @@ interface McpPromptContract
     public function description(): string;
 
     /**
-     * JSON Schema (draft-07 compatible) for the template's
-     * arguments — same shape as `McpToolContract::schema()`.
+     * Prompt-argument descriptors per the MCP spec for `prompts/list`:
+     * a list of `{name, description?, required?}` entries, NOT a
+     * JSON Schema object. The spec is intentionally simpler than
+     * the tool input schema — clients use these only to render
+     * argument forms, not to validate types.
      *
-     * @return array<string,mixed>
+     * Example:
+     *   [
+     *     ['name' => 'doc_id',  'description' => 'KB doc id',  'required' => true],
+     *     ['name' => 'tone',    'description' => 'casual / formal', 'required' => false],
+     *   ]
+     *
+     * @return array<int,array{name:string,description?:string,required?:bool}>
      */
     public function arguments(): array;
 
@@ -52,10 +61,10 @@ interface McpPromptContract
      *   }
      *
      * Implementations MAY return a flat list of messages — the
-     * orchestrator wraps it in the expected envelope.
+     * orchestrator wraps it in the expected `{messages:[…]}` envelope.
      *
-     * @param  array<string,mixed> $arguments
-     * @return array<string,mixed>
+     * @param  array<string,mixed>                                     $arguments
+     * @return array<string,mixed>|array<int,array<string,mixed>>
      */
     public function render(array $arguments): array;
 }
