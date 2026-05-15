@@ -80,6 +80,16 @@ class AuditControllerTest extends TestCase
         $this->assertSame('srv-2', $response->json('data.0.mcp_server_id'));
     }
 
+    public function test_non_eloquent_audit_model_returns_500_instead_of_fatal_error(): void
+    {
+        config(['mcp-pack.audit_model' => \stdClass::class]);
+        InjectTenantMiddleware::$tenantId = 'acme';
+
+        $response = $this->getJson('/api/admin/mcp-pack/audit');
+        $response->assertStatus(500);
+        $this->assertSame('audit_model_missing', $response->json('error.code'));
+    }
+
     public function test_per_page_is_clamped_between_1_and_200(): void
     {
         for ($i = 0; $i < 5; $i++) {

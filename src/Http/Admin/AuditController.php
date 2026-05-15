@@ -101,7 +101,17 @@ final class AuditController
         $class = is_string($configured) && $configured !== ''
             ? $configured
             : McpToolCallAudit::class;
-        return class_exists($class) ? $class : null;
+        // The controller calls Eloquent APIs (`::query()`, attribute
+        // accessors); reject anything that isn't a `Model` subclass
+        // so a misconfigured FQCN surfaces a clean JSON 500 instead
+        // of an `Error: Call to undefined method ::query()`.
+        if (! class_exists($class)) {
+            return null;
+        }
+        if (! is_subclass_of($class, Model::class) && $class !== Model::class) {
+            return null;
+        }
+        return $class;
     }
 
     private function resolveTenantId(Request $request): ?string

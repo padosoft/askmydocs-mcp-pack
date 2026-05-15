@@ -127,6 +127,54 @@ class ServersControllerTest extends TestCase
         $this->assertSame('handshake_failed', $response->json('error.code'));
     }
 
+    public function test_show_is_tenant_scoped_under_id_reuse(): void
+    {
+        // Two tenants reuse the same server id "srv-1" — the contract
+        // documents ids as scoped per tenant. `show` must surface the
+        // active tenant's row, not the other tenant's same-id entry.
+        $registry = new InMemoryMcpServerRegistry();
+        $registry->add(new FakeMcpServer(id: 'srv-1', name: 'Acme Alpha', tenantId: 'acme'));
+        $registry->add(new FakeMcpServer(id: 'srv-1', name: 'Globex Alpha', tenantId: 'globex'));
+        $this->app->instance(McpServerRegistryContract::class, $registry);
+
+        InjectTenantMiddleware::$tenantId = 'globex';
+        $response = $this->getJson('/api/admin/mcp-pack/servers/srv-1');
+        $response->assertOk();
+        $this->assertSame('Globex Alpha', $response->json('data.name'));
+
+        InjectTenantMiddleware::$tenantId = 'acme';
+        $response = $this->getJson('/api/admin/mcp-pack/servers/srv-1');
+        $response->assertOk();
+        $this->assertSame('Acme Alpha', $response->json('data.name'));
+    }
+
+    public function test_handshake_reports_cached_true_only_on_real_cache_hit(): void
+    {
+        $this->bootRegistry();
+        $stub = $this->bootHandshakeStub();
+        $stub->payload = [
+            'capabilities' => ['tools' => []],
+            'tools' => [['name' => 'kb.search']],
+        ];
+
+        // First call: no cache yet → `cached: false` even with force=0.
+        $stub->peekHit = false;
+        $response = $this->postJson('/api/admin/mcp-pack/servers/srv-global/handshake');
+        $response->assertOk();
+        $this->assertFalse($response->json('data.cached'));
+
+        // Cache populated → `cached: true` on force=0.
+        $stub->peekHit = true;
+        $response = $this->postJson('/api/admin/mcp-pack/servers/srv-global/handshake');
+        $response->assertOk();
+        $this->assertTrue($response->json('data.cached'));
+
+        // force=1 → `cached: false` regardless of cache state.
+        $response = $this->postJson('/api/admin/mcp-pack/servers/srv-global/handshake?force=1');
+        $response->assertOk();
+        $this->assertFalse($response->json('data.cached'));
+    }
+
     public function test_tools_filters_by_allowed_tools_when_configured(): void
     {
         $registry = new InMemoryMcpServerRegistry();

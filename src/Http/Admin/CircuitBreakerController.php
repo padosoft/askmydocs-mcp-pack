@@ -4,8 +4,10 @@ namespace Padosoft\AskMyDocsMcpPack\Http\Admin;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpServerContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerRegistryContract;
 use Padosoft\AskMyDocsMcpPack\Resilience\CircuitBreaker;
+use Padosoft\AskMyDocsMcpPack\Services\McpHandshakeService;
 
 /**
  * v1.4.0 — read-only inspection of the per-(server, tool) circuit
@@ -26,6 +28,7 @@ final class CircuitBreakerController
     public function __construct(
         private readonly CircuitBreaker $breaker,
         private readonly McpServerRegistryContract $registry,
+        private readonly McpHandshakeService $handshake,
     ) {}
 
     public function __invoke(Request $request): JsonResponse
@@ -40,25 +43,17 @@ final class CircuitBreakerController
             ], 400);
         }
 
-        $server = $this->registry->find($serverId);
+        // Resolve from the active tenant's visible catalog so reused
+        // ids across tenants can't surface another tenant's entry.
+        $server = $this->findForActiveTenant($request, $serverId);
         if ($server === null) {
-            return new JsonResponse([
-                'error' => [
-                    'code' => 'not_found',
-                    'message' => "Server [{$serverId}] not found.",
-                ],
-            ], 404);
-        }
-        // R30: enforce tenant boundary mirroring ServersController.
-        $tenantId = $this->resolveTenantId($request);
-        if ($server->tenantId() !== null && $server->tenantId() !== $tenantId) {
             return new JsonResponse([
                 'error' => ['code' => 'not_found', 'message' => "Server [{$serverId}] not found."],
             ], 404);
         }
 
         $toolFilter = $request->string('tool')->toString();
-        $tools = $toolFilter !== '' ? [$toolFilter] : $server->allowedTools();
+        $tools = $toolFilter !== '' ? [$toolFilter] : $this->sweepToolNames($server);
 
         $data = [];
         foreach ($tools as $toolName) {
@@ -79,6 +74,48 @@ final class CircuitBreakerController
                 'count' => count($data),
             ],
         ]);
+    }
+
+    /**
+     * In sweep mode (no explicit `tool`) the controller must list
+     * EVERY tool the breaker tracks for this server. When
+     * `allowedTools()` is non-empty that list is authoritative; when
+     * it's empty (the "all advertised tools" mode), fall back to the
+     * handshake-cached catalog so the sweep isn't silently empty.
+     * The handshake is only PEEKed — we never trigger a fresh
+     * upstream call from a read-only inspection endpoint.
+     *
+     * @return array<int,string>
+     */
+    private function sweepToolNames(McpServerContract $server): array
+    {
+        $allowed = $server->allowedTools();
+        if ($allowed !== []) {
+            return $allowed;
+        }
+
+        $cached = $this->handshake->peek($server);
+        if ($cached === null) {
+            return [];
+        }
+        return array_values(array_filter(
+            array_map(
+                static fn(array $tool): string => (string) ($tool['name'] ?? ''),
+                $cached['tools'] ?? [],
+            ),
+            static fn(string $name): bool => $name !== '',
+        ));
+    }
+
+    private function findForActiveTenant(Request $request, string $id): ?McpServerContract
+    {
+        $tenantId = $this->resolveTenantId($request);
+        foreach ($this->registry->forTenant($tenantId) as $server) {
+            if ($server->id() === $id) {
+                return $server;
+            }
+        }
+        return null;
     }
 
     private function resolveTenantId(Request $request): ?string

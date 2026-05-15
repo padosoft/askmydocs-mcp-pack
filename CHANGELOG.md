@@ -46,17 +46,43 @@ package wires the routes only when `MCP_PACK_ADMIN_ENABLED=true`.
   `api/admin/mcp-pack`; default middleware `['api']`. Hosts wire
   Sanctum + RBAC + role gates by overriding `middleware`.
 
+### Tenant-scoped lookups + accurate `cached` signal
+
+- All admin lookups select from `forTenant($tenantId)` first
+  (rather than `find($id)` + post-hoc boundary check), so two
+  tenants reusing the same server id surface their OWN entry
+  instead of seeing another tenant's row leak through to the
+  404 path.
+- `POST /servers/{id}/handshake` reports `cached: true` ONLY when
+  the handshake cache really hit before the call (new
+  `McpHandshakeService::peek()` probe before `refresh()`). The
+  previous shape derived `cached` from the `force` flag alone,
+  which lied about first-time non-cached handshakes.
+- `GET /circuit-breaker` in sweep mode falls back to the
+  handshake-cached catalog when `allowedTools()` is empty (the
+  "all advertised tools" mode), so the sweep is not silently
+  empty for servers that don't pre-filter.
+- `AuditController` validates that the configured
+  `mcp-pack.audit_model` is an Eloquent `Model` subclass before
+  calling `::query()` — a misconfigured FQCN now surfaces a clean
+  JSON 500 (`error.code = audit_model_missing`) instead of a
+  fatal "method not found" error.
+
 ### Tests
 
-- **111 tests / 298 assertions** all green (was 95/242 in v1.3.0).
-  +16 tests across `ServersControllerTest` (7 cases),
-  `AuditControllerTest` (4 cases), and
-  `CircuitBreakerControllerTest` (5 cases) covering the trusted-
+- **116 tests / 316 assertions** all green (was 95/242 in v1.3.0).
+  +21 tests across `ServersControllerTest` (9 cases),
+  `AuditControllerTest` (5 cases), and
+  `CircuitBreakerControllerTest` (7 cases) covering the trusted-
   tenant-attribute path, tenant-boundary enforcement, missing /
   unknown server 404, handshake force flag propagation,
   transport-failure 502, tool filtering by `allowedTools`, audit
   pagination + filters + per-page clamping, circuit-breaker
-  explicit-tool + sweep modes, and breaker tenant boundary.
+  explicit-tool + sweep modes, breaker tenant boundary, AND four
+  iter-1 regression cases: tenant-scoped lookup under id reuse
+  (servers + circuit-breaker), accurate `cached` reporting,
+  sweep fallback to handshake cache, and non-Eloquent audit
+  model surfacing a clean 500.
 
 ### Deferred to v1.5.0
 

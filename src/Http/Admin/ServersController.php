@@ -50,24 +50,28 @@ final class ServersController
 
     public function show(Request $request, string $id): JsonResponse
     {
-        $server = $this->registry->find($id);
+        $server = $this->findForActiveTenant($request, $id);
         if ($server === null) {
             return $this->notFound("Server [{$id}] not found.");
         }
-        $this->assertTenantBoundary($request, $server);
 
         return new JsonResponse(['data' => $this->resourceShape($server)]);
     }
 
     public function handshake(Request $request, string $id): JsonResponse
     {
-        $server = $this->registry->find($id);
+        $server = $this->findForActiveTenant($request, $id);
         if ($server === null) {
             return $this->notFound("Server [{$id}] not found.");
         }
-        $this->assertTenantBoundary($request, $server);
 
         $force = $request->boolean('force', false);
+
+        // Distinguish "cache hit" (peek returned non-null + force=false)
+        // from "cache miss / re-fetch" by probing the cache BEFORE the
+        // refresh call. Previously `cached` was derived from `$force`
+        // alone, which lied about first-time non-cached handshakes.
+        $cacheHit = ! $force && $this->handshake->peek($server) !== null;
 
         try {
             $payload = $this->handshake->refresh($server, force: $force);
@@ -85,18 +89,17 @@ final class ServersController
                 'server_id' => $server->id(),
                 'capabilities' => $payload['capabilities'],
                 'tools' => $payload['tools'],
-                'cached' => ! $force,
+                'cached' => $cacheHit,
             ],
         ]);
     }
 
     public function tools(Request $request, string $id): JsonResponse
     {
-        $server = $this->registry->find($id);
+        $server = $this->findForActiveTenant($request, $id);
         if ($server === null) {
             return $this->notFound("Server [{$id}] not found.");
         }
-        $this->assertTenantBoundary($request, $server);
 
         try {
             $payload = $this->handshake->refresh($server, force: false);
@@ -157,15 +160,24 @@ final class ServersController
         return is_string($tenant) && $tenant !== '' ? $tenant : null;
     }
 
-    private function assertTenantBoundary(Request $request, McpServerContract $server): void
+    /**
+     * Resolve a server by id ONLY within the active tenant's visible
+     * catalog. `McpServerContract::id()` is documented as scoped per
+     * tenant, so a bare `$registry->find($id)` can return another
+     * tenant's entry when two tenants reuse the same id — followed
+     * by a tenant-boundary 404 that masks the host's own matching
+     * server. Selecting from `forTenant($tenantId)` makes the lookup
+     * structurally tenant-correct.
+     */
+    private function findForActiveTenant(Request $request, string $id): ?McpServerContract
     {
-        $requestTenant = $this->resolveTenantId($request);
-        $serverTenant = $server->tenantId();
-        // Platform-global servers (tenant_id === null) are visible to
-        // any authenticated tenant. Tenant-scoped servers must match.
-        if ($serverTenant !== null && $serverTenant !== $requestTenant) {
-            abort(404, 'Server not found.');
+        $tenantId = $this->resolveTenantId($request);
+        foreach ($this->registry->forTenant($tenantId) as $server) {
+            if ($server->id() === $id) {
+                return $server;
+            }
         }
+        return null;
     }
 
     private function notFound(string $message): JsonResponse

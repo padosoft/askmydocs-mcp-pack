@@ -5,7 +5,9 @@ namespace Padosoft\AskMyDocsMcpPack\Tests\Feature\Http\Admin;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerRegistryContract;
 use Padosoft\AskMyDocsMcpPack\Defaults\InMemoryMcpServerRegistry;
 use Padosoft\AskMyDocsMcpPack\Resilience\CircuitBreaker;
+use Padosoft\AskMyDocsMcpPack\Services\McpHandshakeService;
 use Padosoft\AskMyDocsMcpPack\Tests\Support\FakeMcpServer;
+use Padosoft\AskMyDocsMcpPack\Tests\Support\StubHandshakeService;
 use Padosoft\AskMyDocsMcpPack\Tests\TestCase;
 
 class CircuitBreakerControllerTest extends TestCase
@@ -88,5 +90,51 @@ class CircuitBreakerControllerTest extends TestCase
 
         $this->getJson('/api/admin/mcp-pack/circuit-breaker?server=srv-acme&tool=kb.search')
             ->assertStatus(404);
+    }
+
+    public function test_sweep_falls_back_to_handshake_cache_when_allowed_tools_empty(): void
+    {
+        $registry = new InMemoryMcpServerRegistry();
+        // allowedTools is empty → "all advertised tools" semantics; the
+        // sweep MUST pick up the handshake cache instead of returning
+        // an empty list.
+        $registry->add(new FakeMcpServer(id: 'srv-all', tenantId: null, allowedTools: []));
+        $this->app->instance(McpServerRegistryContract::class, $registry);
+
+        $stub = new StubHandshakeService();
+        $stub->peekHit = true;
+        $stub->payload = [
+            'capabilities' => ['tools' => []],
+            'tools' => [
+                ['name' => 'kb.search'],
+                ['name' => 'kb.write'],
+            ],
+        ];
+        $this->app->instance(McpHandshakeService::class, $stub);
+
+        $response = $this->getJson('/api/admin/mcp-pack/circuit-breaker?server=srv-all');
+        $response->assertOk();
+        $names = array_column($response->json('data'), 'tool_name');
+        $this->assertEqualsCanonicalizing(['kb.search', 'kb.write'], $names);
+    }
+
+    public function test_is_tenant_scoped_under_id_reuse(): void
+    {
+        $registry = new InMemoryMcpServerRegistry();
+        $registry->add(new FakeMcpServer(id: 'srv-1', tenantId: 'acme', allowedTools: ['kb.search']));
+        $registry->add(new FakeMcpServer(id: 'srv-1', tenantId: 'globex', allowedTools: ['kb.write']));
+        $this->app->instance(McpServerRegistryContract::class, $registry);
+
+        // acme view → sees its own kb.search entry.
+        InjectTenantMiddleware::$tenantId = 'acme';
+        $response = $this->getJson('/api/admin/mcp-pack/circuit-breaker?server=srv-1');
+        $response->assertOk();
+        $this->assertSame(['kb.search'], array_column($response->json('data'), 'tool_name'));
+
+        // globex view → sees its own kb.write entry.
+        InjectTenantMiddleware::$tenantId = 'globex';
+        $response = $this->getJson('/api/admin/mcp-pack/circuit-breaker?server=srv-1');
+        $response->assertOk();
+        $this->assertSame(['kb.write'], array_column($response->json('data'), 'tool_name'));
     }
 }

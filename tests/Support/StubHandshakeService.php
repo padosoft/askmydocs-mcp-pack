@@ -26,6 +26,13 @@ final class StubHandshakeService extends McpHandshakeService
     /** @var list<bool> */
     public array $forceCalls = [];
 
+    public bool $peekHit = false;
+
+    public function peek(McpServerContract $server): ?array
+    {
+        return $this->peekHit ? $this->payload : null;
+    }
+
     public function __construct()
     {
         parent::__construct(ttlSeconds: 0);
