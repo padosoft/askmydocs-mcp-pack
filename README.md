@@ -617,13 +617,23 @@ End-to-end Playwright coverage in **AskMyDocs** exercises:
 
 ## Roadmap
 
-| Version | Status      | Highlights                                                       |
-| ------- | ----------- | ---------------------------------------------------------------- |
-| v1.0    | ⏳ planned  | Contracts + orchestrator + stdio/http transports + audit + ping. |
-| v1.1    | ⏳ planned  | SSE transport, `resources/*` + `prompts/*` JSON-RPC methods.     |
-| v1.2    | ⏳ planned  | First-class server-side (expose this Laravel app AS an MCP server). |
-| v1.3    | ⏳ planned  | Per-tool circuit breaker + adaptive retry budget.                |
-| v1.4    | ⏳ planned  | Companion admin SPA (`padosoft/askmydocs-mcp-pack-admin`).       |
+| Version | Status                       | Highlights                                                       |
+| ------- | ---------------------------- | ---------------------------------------------------------------- |
+| v1.0.0  | ✅ shipped 2026-05-15        | Contracts + orchestrator + stdio/http transports + audit + ping. |
+| v1.0.1  | ✅ shipped 2026-05-15        | Defensive `up()`/`down()` guards on the audit-table migration so the package coexists with a host-owned `mcp_tool_call_audit`. Recipe 5 walks the coexistence pattern. |
+| v1.1    | ⏳ next                      | `SseJsonRpcTransport` for remote HTTP+SSE gateways; JSON-RPC `resources/list` + `resources/read`; JSON-RPC `prompts/list` + `prompts/get`. |
+| v1.2    | ⏳ planned                   | First-class **server-side** — same package exposes a Laravel app AS an MCP server (stdio long-lived runner + HTTP+SSE route + JSON-RPC handler routing `initialize` / `tools/list` / `tools/call` to host-supplied tool catalog + auth + RBAC). |
+| v1.3    | ⏳ planned                   | Per-tool circuit breaker (`open` / `half-open` / `closed` with TTL recovery) + adaptive retry budget (token-bucket per (tenant, server) with exponential backoff) + telemetry events. |
+| v1.4    | ⏳ planned (post-AskMyDocs)  | Companion admin SPA (`padosoft/askmydocs-mcp-pack-admin`) — opt-in cross-mount surface for server CRUD + handshake + tool catalog + audit log + circuit-breaker state. |
+
+The v1.1 → v1.3 cycle ships **before** the AskMyDocs host adopts the
+package. Consumers willing to ride v1.0 today are welcome to do so —
+the public API surface is stable and won't break before v2 — but
+AskMyDocs's own host integration is intentionally deferred to land
+over the complete v1.3 feature set in a single integration cycle
+rather than three partial passes. See
+[lopadova/AskMyDocs roadmap](https://github.com/lopadova/AskMyDocs#roadmap)
+for the host-side milestones (v7.0/W2 → W5).
 
 ---
 
