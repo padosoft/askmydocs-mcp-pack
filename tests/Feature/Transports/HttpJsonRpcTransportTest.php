@@ -60,7 +60,7 @@ class HttpJsonRpcTransportTest extends TestCase
     public function test_is_healthy_hits_health_path(): void
     {
         Http::fake([
-            'gateway.example.test/healthz' => Http::response('ok', 200),
+            'gateway.example.test/rpc/healthz' => Http::response('ok', 200),
         ]);
 
         $transport = new HttpJsonRpcTransport([

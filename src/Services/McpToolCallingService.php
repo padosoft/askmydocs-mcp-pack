@@ -61,7 +61,10 @@ class McpToolCallingService
             return $this->host->chat(new HostChatTurn($messages, [], $tenantId, $extras));
         }
 
-        $tools = array_map(static fn(array $entry): McpToolContract => $entry['tool'], $toolMap);
+        $tools = array_values(array_map(
+            static fn(array $entry): McpToolContract => $entry['tool'],
+            $toolMap,
+        ));
         $conversation = $messages;
 
         for ($i = 0; $i < $this->maxIterations; $i++) {

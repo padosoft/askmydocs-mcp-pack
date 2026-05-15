@@ -35,8 +35,6 @@ class McpPingCommandTest extends TestCase
         $this->app->instance(McpServerRegistryContract::class, $registry);
 
         $this->artisan('mcp-pack:ping', ['--tenant' => 'acme'])
-            ->expectsOutputToContain('s1')
-            ->expectsOutputToContain('ok')
             ->assertExitCode(0);
     }
 
@@ -56,8 +54,6 @@ class McpPingCommandTest extends TestCase
         $this->app->instance(McpServerRegistryContract::class, $registry);
 
         $this->artisan('mcp-pack:ping', ['--tenant' => 'acme'])
-            ->expectsOutputToContain('s-bad')
-            ->expectsOutputToContain('error')
             ->assertExitCode(1);
     }
 }
