@@ -98,6 +98,152 @@ class McpClient
         return $this->call($request);
     }
 
+    /**
+     * v1.1.0 — MCP `resources/list`. Returns one page of the upstream
+     * server's catalog of readable resources, plus the `nextCursor`
+     * the spec mandates for paging.
+     *
+     * @return array{resources:array<int,array<string,mixed>>,nextCursor:?string}
+     */
+    public function listResources(?string $cursor = null): array
+    {
+        $params = $cursor !== null ? ['cursor' => $cursor] : null;
+        $request = JsonRpcMessage::request(self::newId(), 'resources/list', $params);
+        $payload = $this->call($request);
+
+        $resources = $payload['resources'] ?? [];
+        if (! is_array($resources)) {
+            $resources = [];
+        }
+        $resources = array_values(array_filter(
+            $resources,
+            static fn($resource): bool => is_array($resource) && isset($resource['uri']),
+        ));
+
+        $nextCursor = $payload['nextCursor'] ?? null;
+        return [
+            'resources' => $resources,
+            'nextCursor' => is_string($nextCursor) ? $nextCursor : null,
+        ];
+    }
+
+    /**
+     * Eager helper that drains every page of `resources/list` into a
+     * flat list. Useful for hosts that always want the full catalog
+     * (admin SPA, regression tests). Production hosts should prefer
+     * {@see listResources()} with explicit cursor handling so they
+     * can stream large catalogs without buffering.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function listAllResources(): array
+    {
+        $all = [];
+        $cursor = null;
+        do {
+            $page = $this->listResources($cursor);
+            foreach ($page['resources'] as $resource) {
+                $all[] = $resource;
+            }
+            $cursor = $page['nextCursor'];
+        } while ($cursor !== null);
+
+        return $all;
+    }
+
+    /**
+     * v1.1.0 — MCP `resources/read`. Returns the FULL `resources/read`
+     * result envelope verbatim — typically `{contents: [{type, text|blob, mimeType?}, …]}`.
+     * Callers that only want the first text block can read
+     * `$envelope['contents'][0]['text']`.
+     *
+     * @return array<string,mixed>
+     */
+    public function readResource(string $uri): array
+    {
+        $request = JsonRpcMessage::request(
+            id: self::newId(),
+            method: 'resources/read',
+            params: ['uri' => $uri],
+        );
+
+        return $this->call($request);
+    }
+
+    /**
+     * v1.1.0 — MCP `prompts/list`. Returns one page of the upstream
+     * server's catalog of named prompt templates plus `nextCursor`.
+     *
+     * @return array{prompts:array<int,array<string,mixed>>,nextCursor:?string}
+     */
+    public function listPrompts(?string $cursor = null): array
+    {
+        $params = $cursor !== null ? ['cursor' => $cursor] : null;
+        $request = JsonRpcMessage::request(self::newId(), 'prompts/list', $params);
+        $payload = $this->call($request);
+
+        $prompts = $payload['prompts'] ?? [];
+        if (! is_array($prompts)) {
+            $prompts = [];
+        }
+        $prompts = array_values(array_filter(
+            $prompts,
+            static fn($prompt): bool => is_array($prompt) && isset($prompt['name']),
+        ));
+
+        $nextCursor = $payload['nextCursor'] ?? null;
+        return [
+            'prompts' => $prompts,
+            'nextCursor' => is_string($nextCursor) ? $nextCursor : null,
+        ];
+    }
+
+    /**
+     * Eager helper draining every page of `prompts/list`. See
+     * {@see listAllResources()} for the equivalent rationale.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function listAllPrompts(): array
+    {
+        $all = [];
+        $cursor = null;
+        do {
+            $page = $this->listPrompts($cursor);
+            foreach ($page['prompts'] as $prompt) {
+                $all[] = $prompt;
+            }
+            $cursor = $page['nextCursor'];
+        } while ($cursor !== null);
+
+        return $all;
+    }
+
+    /**
+     * v1.1.0 — MCP `prompts/get`. Renders a named prompt with the
+     * supplied arguments. Result shape: `{description?, messages:[…]}`.
+     *
+     * Empty `$arguments` is encoded as a JSON object (`{}`), NOT a
+     * JSON array (`[]`), because the MCP spec requires `arguments` to
+     * be a map. Strict server implementations reject `arguments: []`.
+     *
+     * @param  array<string,mixed> $arguments
+     * @return array<string,mixed>
+     */
+    public function getPrompt(string $name, array $arguments = []): array
+    {
+        $request = JsonRpcMessage::request(
+            id: self::newId(),
+            method: 'prompts/get',
+            params: [
+                'name' => $name,
+                'arguments' => $arguments === [] ? new \stdClass() : $arguments,
+            ],
+        );
+
+        return $this->call($request);
+    }
+
     public function transport(): McpTransportContract
     {
         return $this->transport;
@@ -130,6 +276,7 @@ class McpClient
 
         return match ($transport) {
             'http', 'https' => new HttpJsonRpcTransport($config),
+            'sse' => new \Padosoft\AskMyDocsMcpPack\Transports\SseJsonRpcTransport($config),
             'stdio' => new StdioJsonRpcTransport($config),
             default => throw new McpTransportException("Unknown MCP transport [{$transport}] for server [{$server->id()}]."),
         };

@@ -6,6 +6,35 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-05-15
+
+### Added
+
+- **SSE transport** — `Padosoft\AskMyDocsMcpPack\Transports\SseJsonRpcTransport`
+  for HTTP+SSE remote MCP gateways. JSON-RPC requests are POSTed; the
+  response is parsed from the SSE event stream (handles intermediate
+  progress notifications, multi-line `data:` fields, and the final
+  response frame matching the request id). `McpClient::transportFor()`
+  now dispatches the `sse` transport string to this class.
+- **`McpResourceContract`** + `McpClient::listResources()` +
+  `McpClient::readResource(string $uri)` — JSON-RPC `resources/list`
+  and `resources/read` per the MCP spec. Resources are PASSIVE
+  (readable, not invocable).
+- **`McpPromptContract`** + `McpClient::listPrompts()` +
+  `McpClient::getPrompt(string $name, array $arguments = [])` —
+  JSON-RPC `prompts/list` and `prompts/get`. Prompts are
+  parameterised templates the host can prepend to the conversation
+  as a starting point.
+- 13 new tests across `tests/Feature/Services/McpClientResourcesPromptsTest.php`
+  and `tests/Feature/Transports/SseJsonRpcTransportTest.php` —
+  bringing the suite to 55 tests / 134 assertions.
+
+### Compatibility
+
+- Drop-in extension on top of v1.0.x — no contract changes on the
+  existing surface. Consumers that only use tools continue to work
+  unmodified.
+
 ## [1.0.1] — 2026-05-15
 
 ### Fixed
