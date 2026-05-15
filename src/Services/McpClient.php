@@ -98,6 +98,87 @@ class McpClient
         return $this->call($request);
     }
 
+    /**
+     * v1.1.0 — MCP `resources/list`. Returns the upstream server's
+     * catalog of readable resources (URI + name + description +
+     * mimeType, per the MCP spec shape).
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function listResources(): array
+    {
+        $request = JsonRpcMessage::request(self::newId(), 'resources/list');
+        $payload = $this->call($request);
+
+        $resources = $payload['resources'] ?? [];
+        if (! is_array($resources)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            $resources,
+            static fn($resource): bool => is_array($resource) && isset($resource['uri']),
+        ));
+    }
+
+    /**
+     * v1.1.0 — MCP `resources/read`. Returns the resource payload as
+     * an array of content blocks (text or blob).
+     *
+     * @return array<string,mixed>
+     */
+    public function readResource(string $uri): array
+    {
+        $request = JsonRpcMessage::request(
+            id: self::newId(),
+            method: 'resources/read',
+            params: ['uri' => $uri],
+        );
+
+        return $this->call($request);
+    }
+
+    /**
+     * v1.1.0 — MCP `prompts/list`. Returns the upstream server's
+     * catalog of named prompt templates (name + description +
+     * arguments JSON Schema).
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function listPrompts(): array
+    {
+        $request = JsonRpcMessage::request(self::newId(), 'prompts/list');
+        $payload = $this->call($request);
+
+        $prompts = $payload['prompts'] ?? [];
+        if (! is_array($prompts)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            $prompts,
+            static fn($prompt): bool => is_array($prompt) && isset($prompt['name']),
+        ));
+    }
+
+    /**
+     * v1.1.0 — MCP `prompts/get`. Renders a named prompt with the
+     * supplied arguments. Result shape: `{description?, messages:[…]}`.
+     *
+     * @param  array<string,mixed> $arguments
+     * @return array<string,mixed>
+     */
+    public function getPrompt(string $name, array $arguments = []): array
+    {
+        $request = JsonRpcMessage::request(
+            id: self::newId(),
+            method: 'prompts/get',
+            params: ['name' => $name, 'arguments' => $arguments],
+        );
+
+        return $this->call($request);
+    }
+
     public function transport(): McpTransportContract
     {
         return $this->transport;
@@ -130,6 +211,7 @@ class McpClient
 
         return match ($transport) {
             'http', 'https' => new HttpJsonRpcTransport($config),
+            'sse' => new \Padosoft\AskMyDocsMcpPack\Transports\SseJsonRpcTransport($config),
             'stdio' => new StdioJsonRpcTransport($config),
             default => throw new McpTransportException("Unknown MCP transport [{$transport}] for server [{$server->id()}]."),
         };
