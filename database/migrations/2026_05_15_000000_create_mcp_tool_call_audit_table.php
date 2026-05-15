@@ -8,6 +8,19 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // Defensive guard: when the package is installed on top of a
+        // host that already manages an `mcp_tool_call_audit` table
+        // (e.g. AskMyDocs v5.0+, which shipped its own audit table
+        // before extracting this pack), don't try to recreate it.
+        // The host is expected to ALTER its existing table to add the
+        // package's columns (`input_hash`, `actor`) and to point
+        // `mcp-pack.audit_model` at a subclass that satisfies both
+        // schemas — see the package README "Audit-model coexistence"
+        // recipe.
+        if (Schema::hasTable('mcp_tool_call_audit')) {
+            return;
+        }
+
         Schema::create('mcp_tool_call_audit', function (Blueprint $table) {
             $table->id();
             $table->string('tenant_id', 50)->default('default')->index();

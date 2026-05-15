@@ -6,6 +6,21 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-05-15
+
+### Fixed
+
+- The `create_mcp_tool_call_audit_table` migration now guards on
+  `Schema::hasTable('mcp_tool_call_audit')`. When a host already
+  manages its own audit table (e.g. AskMyDocs v5.0+, which shipped a
+  v5.0 audit migration before extracting this pack), running
+  `php artisan migrate` after `composer require` previously failed
+  with "table already exists". The guard makes the migration a no-op
+  in that scenario; hosts ALTER their existing table to add the
+  `input_hash` + `actor` columns the package writes and point
+  `mcp-pack.audit_model` at a subclass that satisfies both schemas.
+
+
 ### Added
 
 - Initial extraction from AskMyDocs v6.x (planned for v1.0.0).
