@@ -157,6 +157,93 @@ class ResilienceMediatorTest extends TestCase
         $this->assertSame(1, $attempts, 'non-transport exception must bubble immediately');
     }
 
+    public function test_breaker_only_does_not_retry_transport_failures(): void
+    {
+        // MCP_PACK_CB_ENABLED=true + MCP_PACK_RETRY_ENABLED=false
+        // → first transport failure surfaces immediately; the breaker
+        //   still records the failure so repeated calls can trip it.
+        $cache = Cache::store();
+        $events = $this->app['events'];
+        $attempts = 0;
+        $mediator = new ResilienceMediator(
+            breaker: new CircuitBreaker($cache, $events, failureThreshold: 2, recoverySeconds: 30),
+            budget: new RetryBudget($cache, bucketSize: 99, windowSeconds: 60),
+            events: $events,
+            maxAttempts: 5,
+            baseBackoffMs: 100,
+            maxBackoffMs: 1000,
+            sleep: static fn(int $ms) => null,
+            breakerEnabled: true,
+            retryEnabled: false,
+        );
+
+        try {
+            $mediator->execute('t', 's', 'tool', function () use (&$attempts): void {
+                $attempts++;
+                throw new McpTransportException('down');
+            });
+        } catch (McpTransportException) {
+        }
+        $this->assertSame(1, $attempts, 'retries disabled: caller saw the first failure');
+
+        // A second call still trips the breaker once threshold (2) is reached.
+        try {
+            $mediator->execute('t', 's', 'tool', function () use (&$attempts): void {
+                $attempts++;
+                throw new McpTransportException('down');
+            });
+        } catch (McpTransportException) {
+        }
+        $this->assertSame(2, $attempts);
+
+        // Third call must be short-circuited.
+        $this->expectException(CircuitOpenException::class);
+        $mediator->execute('t', 's', 'tool', function () use (&$attempts): void {
+            $attempts++;
+        });
+    }
+
+    public function test_retry_only_does_not_engage_breaker(): void
+    {
+        // MCP_PACK_RETRY_ENABLED=true + MCP_PACK_CB_ENABLED=false
+        // → many failures retry-loop, never opens the breaker, next
+        //   call still calls upstream (no short-circuit).
+        $cache = Cache::store();
+        $events = $this->app['events'];
+        $attempts = 0;
+        $mediator = new ResilienceMediator(
+            breaker: new CircuitBreaker($cache, $events, failureThreshold: 1, recoverySeconds: 30),
+            budget: new RetryBudget($cache, bucketSize: 99, windowSeconds: 60),
+            events: $events,
+            maxAttempts: 3,
+            baseBackoffMs: 100,
+            maxBackoffMs: 1000,
+            sleep: static fn(int $ms) => null,
+            breakerEnabled: false,
+            retryEnabled: true,
+        );
+
+        try {
+            $mediator->execute('t', 's', 'tool', function () use (&$attempts): void {
+                $attempts++;
+                throw new McpTransportException('down');
+            });
+        } catch (McpTransportException) {
+        }
+        $this->assertSame(3, $attempts, 'retried up to maxAttempts');
+
+        // Next call must reach the upstream — breaker never opened
+        // because it was disabled.
+        try {
+            $mediator->execute('t', 's', 'tool', function () use (&$attempts): void {
+                $attempts++;
+                throw new McpTransportException('down');
+            });
+        } catch (McpTransportException) {
+        }
+        $this->assertSame(6, $attempts);
+    }
+
     public function test_backoff_caps_at_max_backoff_ms(): void
     {
         Event::fake([RetryAttempted::class]);

@@ -41,6 +41,20 @@ final class ResilienceMediator
     /** @var callable(int): void */
     private $sleep;
 
+    /**
+     * Each layer is independent and gated by its own flag so config
+     * is honoured strictly:
+     *
+     *   - $breakerEnabled = false → no pre-check, no post-record;
+     *     the breaker is effectively absent from the call path even
+     *     though the instance is still injected (cheap).
+     *   - $retryEnabled   = false → `maxAttempts` is clamped to 1
+     *     internally, so the first transport failure surfaces to
+     *     the caller without consuming the retry budget.
+     *
+     * The two flags map 1:1 to `mcp-pack.resilience.circuit_breaker.enabled`
+     * and `mcp-pack.resilience.retry.enabled`.
+     */
     public function __construct(
         private readonly CircuitBreaker $breaker,
         private readonly RetryBudget $budget,
@@ -49,6 +63,8 @@ final class ResilienceMediator
         private readonly int $baseBackoffMs = 200,
         private readonly int $maxBackoffMs = 5000,
         ?callable $sleep = null,
+        private readonly bool $breakerEnabled = true,
+        private readonly bool $retryEnabled = true,
     ) {
         $this->sleep = $sleep ?? static function (int $ms): void {
             if ($ms > 0) {
@@ -71,7 +87,7 @@ final class ResilienceMediator
         string $toolName,
         callable $call,
     ): mixed {
-        if (! $this->breaker->allowsCall($serverId, $toolName)) {
+        if ($this->breakerEnabled && ! $this->breaker->allowsCall($serverId, $toolName)) {
             throw new CircuitOpenException(
                 message: "Circuit OPEN for [{$serverId}/{$toolName}].",
                 serverId: $serverId,
@@ -80,6 +96,10 @@ final class ResilienceMediator
             );
         }
 
+        // When retries are disabled the loop runs exactly once and the
+        // first transport failure is re-thrown — no token consumption,
+        // no RetryAttempted events, no sleep.
+        $effectiveMaxAttempts = $this->retryEnabled ? $this->maxAttempts : 1;
         $attempts = 0;
         $lastError = null;
 
@@ -87,26 +107,34 @@ final class ResilienceMediator
             $attempts++;
             try {
                 $result = $call();
-                $this->breaker->recordSuccess($serverId, $toolName);
+                if ($this->breakerEnabled) {
+                    $this->breaker->recordSuccess($serverId, $toolName);
+                }
                 return $result;
             } catch (McpTransportException $e) {
                 $lastError = $e->getMessage();
 
-                if ($attempts >= $this->maxAttempts) {
-                    $this->breaker->recordFailure($serverId, $toolName, $lastError);
-                    $this->events->dispatch(new RetryExhausted(
-                        tenantId: $tenantId,
-                        serverId: $serverId,
-                        toolName: $toolName,
-                        attempts: $attempts,
-                        reason: 'max_attempts',
-                        lastError: $lastError,
-                    ));
+                if ($attempts >= $effectiveMaxAttempts) {
+                    if ($this->breakerEnabled) {
+                        $this->breaker->recordFailure($serverId, $toolName, $lastError);
+                    }
+                    if ($this->retryEnabled) {
+                        $this->events->dispatch(new RetryExhausted(
+                            tenantId: $tenantId,
+                            serverId: $serverId,
+                            toolName: $toolName,
+                            attempts: $attempts,
+                            reason: 'max_attempts',
+                            lastError: $lastError,
+                        ));
+                    }
                     throw $e;
                 }
 
                 if (! $this->budget->tryConsume($tenantId, $serverId)) {
-                    $this->breaker->recordFailure($serverId, $toolName, $lastError);
+                    if ($this->breakerEnabled) {
+                        $this->breaker->recordFailure($serverId, $toolName, $lastError);
+                    }
                     $this->events->dispatch(new RetryExhausted(
                         tenantId: $tenantId,
                         serverId: $serverId,

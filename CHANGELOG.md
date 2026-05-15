@@ -51,17 +51,30 @@ naïve retry-on-failure.
   dedicated `MCP_PACK_RESILIENCE_CACHE_STORE` so breaker / budget
   state can route through a separate cache driver.
 
+### Independent layer flags
+
+The two resilience layers are independent at runtime, not just at
+config time. The mediator constructor accepts `$breakerEnabled` /
+`$retryEnabled` and the service provider wires them from
+`mcp-pack.resilience.circuit_breaker.enabled` /
+`mcp-pack.resilience.retry.enabled`. When retries are disabled the
+loop runs exactly once and the first transport failure surfaces
+immediately; when the breaker is disabled the pre-check and
+post-record are skipped so a string of failures cannot trip a
+circuit the operator did not enable.
+
 ### Tests
 
-- **89 tests / 222 assertions** all green (was 70/173 in v1.2.0).
-  +19 tests across `CircuitBreakerTest` (7 cases),
+- **91 tests / 227 assertions** all green (was 70/173 in v1.2.0).
+  +21 tests across `CircuitBreakerTest` (7 cases),
   `RetryBudgetTest` (5 cases), and `ResilienceMediatorTest`
-  (7 cases) covering state transitions, threshold open, TTL roll
+  (9 cases) covering state transitions, threshold open, TTL roll
   to half-open, success-resets-counter, probe-fail re-opens,
   tenant + server budget isolation, window-rollover refill,
   retry-then-success, max-attempts exhausted, budget-depleted
   abort, open-circuit short-circuit, non-transport exceptions
-  not retried, and backoff capping.
+  not retried, backoff capping, breaker-only does NOT retry
+  transport failures, retry-only does NOT engage the breaker.
 
 ### Compatibility
 

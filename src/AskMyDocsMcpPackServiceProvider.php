@@ -128,6 +128,8 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
                 maxAttempts: max(1, (int) config('mcp-pack.resilience.retry.max_attempts', 3)),
                 baseBackoffMs: max(0, (int) config('mcp-pack.resilience.retry.base_backoff_ms', 200)),
                 maxBackoffMs: max(0, (int) config('mcp-pack.resilience.retry.max_backoff_ms', 5000)),
+                breakerEnabled: (bool) config('mcp-pack.resilience.circuit_breaker.enabled', false),
+                retryEnabled: (bool) config('mcp-pack.resilience.retry.enabled', false),
             );
         });
     }
