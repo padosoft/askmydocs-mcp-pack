@@ -82,4 +82,36 @@ return [
         ],
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | v1.3.0 — Resilience (circuit breaker + adaptive retry)
+    |--------------------------------------------------------------------------
+    |
+    | Opt-in resilience layer wrapped around every upstream tool call.
+    | Both knobs are independent — enable the breaker without retries
+    | for hard fail-fast, or enable retries without the breaker for
+    | naïve retry-on-failure. The cache_store name (when set) routes
+    | breaker + budget state through a dedicated cache driver so the
+    | default application cache cannot evict it under memory pressure.
+    |
+    */
+    'resilience' => [
+        'circuit_breaker' => [
+            'enabled' => env('MCP_PACK_CB_ENABLED', false),
+            'failure_threshold' => (int) env('MCP_PACK_CB_FAILURE_THRESHOLD', 5),
+            'recovery_seconds' => (int) env('MCP_PACK_CB_RECOVERY_SECONDS', 30),
+        ],
+        'retry' => [
+            'enabled' => env('MCP_PACK_RETRY_ENABLED', false),
+            'max_attempts' => (int) env('MCP_PACK_RETRY_MAX_ATTEMPTS', 3),
+            'bucket_size' => (int) env('MCP_PACK_RETRY_BUCKET_SIZE', 20),
+            'bucket_window_seconds' => (int) env('MCP_PACK_RETRY_BUCKET_WINDOW_SECONDS', 60),
+            'base_backoff_ms' => (int) env('MCP_PACK_RETRY_BASE_BACKOFF_MS', 200),
+            'max_backoff_ms' => (int) env('MCP_PACK_RETRY_MAX_BACKOFF_MS', 5000),
+        ],
+        // Optional dedicated cache store name (config/cache.php). When
+        // null the default app cache is used.
+        'cache_store' => env('MCP_PACK_RESILIENCE_CACHE_STORE'),
+    ],
+
 ];

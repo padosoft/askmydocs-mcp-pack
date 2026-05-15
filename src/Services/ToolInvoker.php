@@ -5,6 +5,7 @@ namespace Padosoft\AskMyDocsMcpPack\Services;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerContract;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpTransportException;
 use Padosoft\AskMyDocsMcpPack\Models\McpToolCallAudit;
+use Padosoft\AskMyDocsMcpPack\Resilience\ResilienceMediator;
 use Padosoft\AskMyDocsMcpPack\Support\ToolCallResult;
 
 /**
@@ -18,6 +19,10 @@ use Padosoft\AskMyDocsMcpPack\Support\ToolCallResult;
  */
 class ToolInvoker
 {
+    public function __construct(
+        private readonly ?ResilienceMediator $resilience = null,
+    ) {}
+
     /**
      * @param  array<string,mixed> $arguments
      * @param  array<string,mixed> $context  tenant_id, actor, conversation_id, message_id
@@ -34,9 +39,14 @@ class ToolInvoker
         $error = null;
         $result = null;
 
+        $tenantId = (string) ($context['tenant_id'] ?? $server->tenantId() ?? 'default');
+
         try {
             $client = McpClient::forServer($server);
-            $result = $client->callTool($toolName, $arguments);
+            $call = static fn(): array => $client->callTool($toolName, $arguments);
+            $result = $this->resilience === null
+                ? $call()
+                : $this->resilience->execute($tenantId, $server->id(), $toolName, $call);
         } catch (McpTransportException $e) {
             $status = 'transport_error';
             $error = $e->getMessage();
