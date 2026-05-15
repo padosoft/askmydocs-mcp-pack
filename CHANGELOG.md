@@ -29,9 +29,6 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-
-### Added
-
 - Initial extraction from AskMyDocs v6.x (planned for v1.0.0).
 - Five contracts: `McpToolContract`, `McpServerContract`,
   `McpServerRegistryContract`, `McpToolAuthorizerContract`,
