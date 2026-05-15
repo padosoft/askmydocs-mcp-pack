@@ -17,6 +17,9 @@ use Padosoft\AskMyDocsMcpPack\Defaults\InMemoryMcpServerRegistry;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpHostBridge;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpServerExposure;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpToolAuthorizer;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\AuditController;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\CircuitBreakerController;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\ServersController;
 use Padosoft\AskMyDocsMcpPack\Http\McpServerHttpController;
 use Padosoft\AskMyDocsMcpPack\Resilience\CircuitBreaker;
 use Padosoft\AskMyDocsMcpPack\Resilience\ResilienceMediator;
@@ -94,6 +97,30 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
         $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
 
         $this->registerServerSideHttpRoute();
+        $this->registerAdminRoutes();
+    }
+
+    /**
+     * v1.4.0 — register the admin REST surface under the configured
+     * prefix (default `api/admin/mcp-pack`). Disabled by default.
+     */
+    private function registerAdminRoutes(): void
+    {
+        if (! (bool) config('mcp-pack.admin.enabled', false)) {
+            return;
+        }
+
+        $prefix = (string) config('mcp-pack.admin.prefix', 'api/admin/mcp-pack');
+        $middleware = (array) config('mcp-pack.admin.middleware', ['api']);
+
+        Route::middleware($middleware)->prefix($prefix)->group(function (): void {
+            Route::get('servers', [ServersController::class, 'index'])->name('mcp-pack.admin.servers.index');
+            Route::get('servers/{id}', [ServersController::class, 'show'])->name('mcp-pack.admin.servers.show');
+            Route::post('servers/{id}/handshake', [ServersController::class, 'handshake'])->name('mcp-pack.admin.servers.handshake');
+            Route::get('servers/{id}/tools', [ServersController::class, 'tools'])->name('mcp-pack.admin.servers.tools');
+            Route::get('audit', AuditController::class)->name('mcp-pack.admin.audit');
+            Route::get('circuit-breaker', CircuitBreakerController::class)->name('mcp-pack.admin.circuit-breaker');
+        });
     }
 
     /**
