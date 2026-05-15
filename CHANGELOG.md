@@ -6,6 +6,69 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-05-15
+
+### Added — resilience (circuit breaker + adaptive retry)
+
+Opt-in resilience layer wrapped around every upstream tool call.
+Both knobs are independent — enable the breaker without retries
+for hard fail-fast, or enable retries without the breaker for
+naïve retry-on-failure.
+
+- **`Resilience\CircuitBreaker`** — per-`(serverId, toolName)`
+  three-state machine (`CLOSED` / `OPEN` / `HALF_OPEN`) backed by
+  the Laravel cache so state survives across processes and queue
+  workers. `failureThreshold` consecutive failures OPEN the
+  breaker; after `recoverySeconds` the breaker auto-transitions
+  to `HALF_OPEN` and allows ONE probe; success → `CLOSED`,
+  failure → `OPEN` again. State persists under a single cache key
+  per (server, tool) so dashboards can inspect it directly.
+- **`Resilience\RetryBudget`** — token-bucket per
+  `(tenantId, serverId)`. Each retry consumes a token; bucket
+  refills every `bucketWindowSeconds`. **R30**: cross-tenant
+  isolation by design — a misbehaving tenant cannot exhaust
+  another tenant's retry budget against the same upstream.
+- **`Resilience\ResilienceMediator`** — wraps the upstream call
+  with three layers: pre-check (short-circuit when breaker is
+  `OPEN`), retry loop (exponential backoff capped at
+  `maxBackoffMs`, gated by the budget), post-record (success /
+  failure feeds the breaker). Non-transport exceptions bubble
+  immediately — caller bugs are not retried.
+- **`Exceptions\CircuitOpenException`** — extends
+  `McpTransportException` so callers that already handle
+  transport failures treat the fast-fail path identically. Carries
+  `retryAfterSeconds` for dashboards / clients.
+- **5 telemetry events** under `Resilience\Events\*`:
+  `CircuitOpened`, `CircuitClosed`, `CircuitHalfOpened`,
+  `RetryAttempted`, `RetryExhausted` (reason:
+  `max_attempts` | `budget_depleted`).
+- **`ToolInvoker`** routes through the mediator when at least one
+  of `circuit_breaker.enabled` / `retry.enabled` is true.
+  Constructor-injected, optional — when disabled the invoker
+  behaves exactly as in v1.2.
+- **New config block** `mcp-pack.resilience` driven by
+  `MCP_PACK_CB_*` and `MCP_PACK_RETRY_*` env vars + an optional
+  dedicated `MCP_PACK_RESILIENCE_CACHE_STORE` so breaker / budget
+  state can route through a separate cache driver.
+
+### Tests
+
+- **89 tests / 222 assertions** all green (was 70/173 in v1.2.0).
+  +19 tests across `CircuitBreakerTest` (7 cases),
+  `RetryBudgetTest` (5 cases), and `ResilienceMediatorTest`
+  (7 cases) covering state transitions, threshold open, TTL roll
+  to half-open, success-resets-counter, probe-fail re-opens,
+  tenant + server budget isolation, window-rollover refill,
+  retry-then-success, max-attempts exhausted, budget-depleted
+  abort, open-circuit short-circuit, non-transport exceptions
+  not retried, and backoff capping.
+
+### Compatibility
+
+Drop-in extension on top of v1.2.x. Existing surfaces unchanged
+when resilience is left disabled (the default). Hosts opt in via
+`MCP_PACK_CB_ENABLED=true` and / or `MCP_PACK_RETRY_ENABLED=true`.
+
 ## [1.2.0] — 2026-05-15
 
 ### Added — first-class server-side

@@ -551,6 +551,46 @@ Now every package `ToolInvoker::audit()` row fills BOTH schemas; legacy
 host writes continue to work; the host's existing admin UI and
 operator-forensics queries keep rendering the same way they always did.
 
+### Recipe 6 — fail fast under upstream outage (v1.3.0)
+
+Drop in the circuit breaker + retry budget so a flaky MCP server
+doesn't pin every worker on a long timeout:
+
+```dotenv
+# .env — opt in, both layers are independent
+MCP_PACK_CB_ENABLED=true
+MCP_PACK_CB_FAILURE_THRESHOLD=5
+MCP_PACK_CB_RECOVERY_SECONDS=30
+
+MCP_PACK_RETRY_ENABLED=true
+MCP_PACK_RETRY_MAX_ATTEMPTS=3
+MCP_PACK_RETRY_BUCKET_SIZE=20
+MCP_PACK_RETRY_BUCKET_WINDOW_SECONDS=60
+MCP_PACK_RETRY_BASE_BACKOFF_MS=200
+MCP_PACK_RETRY_MAX_BACKOFF_MS=5000
+```
+
+```php
+// app/Providers/AppServiceProvider.php — wire alerting to the events
+use Illuminate\Support\Facades\Event;
+use Padosoft\AskMyDocsMcpPack\Resilience\Events\CircuitOpened;
+use Padosoft\AskMyDocsMcpPack\Resilience\Events\RetryExhausted;
+
+Event::listen(CircuitOpened::class, function (CircuitOpened $e): void {
+    // Page on-call: a server's tool is failing fast.
+});
+
+Event::listen(RetryExhausted::class, function (RetryExhausted $e): void {
+    // Dashboard tile: which (tenant, server) is burning its budget.
+});
+```
+
+`ToolInvoker` automatically routes through the mediator when either
+knob is enabled; consumers don't change a line of code. The breaker
+state is per `(server_id, tool_name)`; the budget is per
+`(tenant_id, server_id)` so cross-tenant isolation (R30) holds even
+under load.
+
 ---
 
 ## Extension points
@@ -621,9 +661,9 @@ End-to-end Playwright coverage in **AskMyDocs** exercises:
 | ------- | ---------------------------- | ---------------------------------------------------------------- |
 | v1.0.0  | ✅ shipped 2026-05-15        | Contracts + orchestrator + stdio/http transports + audit + ping. |
 | v1.0.1  | ✅ shipped 2026-05-15        | Defensive `up()`/`down()` guards on the audit-table migration so the package coexists with a host-owned `mcp_tool_call_audit`. Recipe 5 walks the coexistence pattern. |
-| v1.1    | ⏳ next                      | `SseJsonRpcTransport` for remote HTTP+SSE gateways; JSON-RPC `resources/list` + `resources/read`; JSON-RPC `prompts/list` + `prompts/get`. |
-| v1.2    | ⏳ planned                   | First-class **server-side** — same package exposes a Laravel app AS an MCP server (stdio long-lived runner + HTTP+SSE route + JSON-RPC handler routing `initialize` / `tools/list` / `tools/call` to host-supplied tool catalog + auth + RBAC). |
-| v1.3    | ⏳ planned                   | Per-tool circuit breaker (`open` / `half-open` / `closed` with TTL recovery) + adaptive retry budget (token-bucket per (tenant, server) with exponential backoff) + telemetry events. |
+| v1.1.0  | ✅ shipped 2026-05-15        | `SseJsonRpcTransport` for remote HTTP+SSE gateways; JSON-RPC `resources/list` + `resources/read`; JSON-RPC `prompts/list` + `prompts/get`. |
+| v1.2.0  | ✅ shipped 2026-05-15        | First-class **server-side** — same package exposes a Laravel app AS an MCP server (stdio long-lived runner + HTTP route + `JsonRpcRequestHandler` dispatching `initialize` / `tools/list` / `tools/call` / `resources/*` / `prompts/*` to a host-supplied catalog + auth + RBAC). |
+| v1.3.0  | ✅ shipped 2026-05-15        | Per-tool circuit breaker (`closed` / `open` / `half_open` with TTL recovery) + adaptive retry budget (token-bucket per `(tenant, server)` with exponential backoff capped at `maxBackoffMs`) + 5 telemetry events. Opt-in, default OFF. |
 | v1.4    | ⏳ planned                   | **Admin backend surface** — REST routes registered by the package SP at `/api/admin/mcp-pack/*` (configurable prefix): servers CRUD + handshake + tools list + paginated audit + circuit-breaker state. Middleware-driven auth (host wires Sanctum + RBAC). OpenAPI 3.1 spec + Postman collection. **NO React/Vue code** — this is the backend the separate `padosoft/askmydocs-mcp-pack-admin` SPA consumes. |
 | ─       | ─                           | ─ |
 | post-v7.0 cycle | 📅 separate package | **`padosoft/askmydocs-mcp-pack-admin`** — standalone React SPA companion. Same pattern as `padosoft/laravel-flow-admin` / `padosoft/laravel-pii-redactor-admin`. Cross-mountable under `/admin/mcp/` in any Laravel host that depends on this package + v1.4. Ships in its own repo with its own R36 cycle once AskMyDocs's v7.0/W6 host integration is green. |

@@ -2,6 +2,9 @@
 
 namespace Padosoft\AskMyDocsMcpPack;
 
+use Illuminate\Contracts\Cache\Factory as CacheFactory;
+use Illuminate\Contracts\Cache\Repository as CacheRepository;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Padosoft\AskMyDocsMcpPack\Console\McpPingCommand;
@@ -15,6 +18,9 @@ use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpHostBridge;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpServerExposure;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpToolAuthorizer;
 use Padosoft\AskMyDocsMcpPack\Http\McpServerHttpController;
+use Padosoft\AskMyDocsMcpPack\Resilience\CircuitBreaker;
+use Padosoft\AskMyDocsMcpPack\Resilience\ResilienceMediator;
+use Padosoft\AskMyDocsMcpPack\Resilience\RetryBudget;
 use Padosoft\AskMyDocsMcpPack\ServerSide\JsonRpcRequestHandler;
 use Padosoft\AskMyDocsMcpPack\Services\McpHandshakeService;
 use Padosoft\AskMyDocsMcpPack\Services\McpToolCallingService;
@@ -38,7 +44,17 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
             );
         });
 
-        $this->app->singleton(ToolInvoker::class, fn() => new ToolInvoker());
+        $this->registerResilience();
+
+        $this->app->singleton(ToolInvoker::class, function ($app) {
+            $cb = (bool) config('mcp-pack.resilience.circuit_breaker.enabled', false);
+            $retry = (bool) config('mcp-pack.resilience.retry.enabled', false);
+            // Only inject the mediator when at least one of the two
+            // layers is enabled. Otherwise the invoker behaves
+            // exactly as in v1.2 — bare callTool() with no wrapping.
+            $mediator = ($cb || $retry) ? $app->make(ResilienceMediator::class) : null;
+            return new ToolInvoker(resilience: $mediator);
+        });
 
         $this->app->singleton(McpHandshakeService::class, function ($app) {
             return new McpHandshakeService(
@@ -78,6 +94,51 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
         $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
 
         $this->registerServerSideHttpRoute();
+    }
+
+    /**
+     * v1.3.0 — bind the circuit breaker + retry budget + mediator,
+     * each backed by the configured cache store (defaulting to the
+     * app's default cache when `cache_store` is null).
+     */
+    private function registerResilience(): void
+    {
+        $this->app->singleton(CircuitBreaker::class, function ($app) {
+            return new CircuitBreaker(
+                cache: $this->resilienceCache($app),
+                events: $app->make(Dispatcher::class),
+                failureThreshold: max(1, (int) config('mcp-pack.resilience.circuit_breaker.failure_threshold', 5)),
+                recoverySeconds: max(1, (int) config('mcp-pack.resilience.circuit_breaker.recovery_seconds', 30)),
+            );
+        });
+
+        $this->app->singleton(RetryBudget::class, function ($app) {
+            return new RetryBudget(
+                cache: $this->resilienceCache($app),
+                bucketSize: max(1, (int) config('mcp-pack.resilience.retry.bucket_size', 20)),
+                windowSeconds: max(1, (int) config('mcp-pack.resilience.retry.bucket_window_seconds', 60)),
+            );
+        });
+
+        $this->app->singleton(ResilienceMediator::class, function ($app) {
+            return new ResilienceMediator(
+                breaker: $app->make(CircuitBreaker::class),
+                budget: $app->make(RetryBudget::class),
+                events: $app->make(Dispatcher::class),
+                maxAttempts: max(1, (int) config('mcp-pack.resilience.retry.max_attempts', 3)),
+                baseBackoffMs: max(0, (int) config('mcp-pack.resilience.retry.base_backoff_ms', 200)),
+                maxBackoffMs: max(0, (int) config('mcp-pack.resilience.retry.max_backoff_ms', 5000)),
+            );
+        });
+    }
+
+    private function resilienceCache(\Illuminate\Contracts\Foundation\Application $app): CacheRepository
+    {
+        $store = config('mcp-pack.resilience.cache_store');
+        $factory = $app->make(CacheFactory::class);
+        return is_string($store) && $store !== ''
+            ? $factory->store($store)
+            : $factory->store();
     }
 
     /**
