@@ -46,7 +46,7 @@ final class JsonRpcMessage
         return new self($id, null, null, $result, null);
     }
 
-    public static function errorResponse(string|int $id, int $code, string $message, mixed $data = null): self
+    public static function errorResponse(string|int|null $id, int $code, string $message, mixed $data = null): self
     {
         $error = ['code' => $code, 'message' => $message];
         if ($data !== null) {
@@ -81,8 +81,15 @@ final class JsonRpcMessage
     {
         $base = ['jsonrpc' => self::VERSION];
 
+        // JSON-RPC §5.1: when a server cannot detect a request `id`
+        // (parse error, invalid request), the response `id` MUST be
+        // null. Emit the key explicitly for every error response and
+        // every response (request with an id) — only notifications
+        // omit it entirely.
         if ($this->id !== null) {
             $base['id'] = $this->id;
+        } elseif ($this->error !== null) {
+            $base['id'] = null;
         }
         if ($this->method !== null) {
             $base['method'] = $this->method;

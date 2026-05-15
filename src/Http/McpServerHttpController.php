@@ -59,22 +59,34 @@ final class McpServerHttpController
 
     private function resolveTenantId(Request $request): ?string
     {
-        // Two opt-in sources, in priority order:
-        //   1. `X-MCP-Tenant` header — set by middleware that
-        //      resolves tenant from API token / OAuth scope.
-        //   2. `request->user()->tenant_id` — common host pattern
-        //      when Sanctum authenticated.
-        $headerTenant = $request->header('X-MCP-Tenant');
-        if (is_string($headerTenant) && $headerTenant !== '') {
-            return $headerTenant;
+        // SECURITY (R30): tenant id is NEVER read from a client-set
+        // request header — an authenticated tenant-A user could
+        // otherwise send `X-MCP-Tenant: tenant-b` and pivot into
+        // another tenant's catalog. Two trusted sources only:
+        //
+        //   1. `request->attributes->get('mcp_pack.tenant_id')` —
+        //      set ONLY by the host's auth middleware after it has
+        //      validated the actor's tenant binding (e.g. via API
+        //      token scope, OAuth claim, or Sanctum ability).
+        //
+        //   2. `$user->tenant_id` accessor — `data_get()` so Eloquent
+        //      attribute magic-get + plain object properties + array
+        //      shapes all work. `property_exists()` was previously
+        //      used here, which is false for Eloquent attributes
+        //      exposed only via __get (the typical Laravel user
+        //      shape), so the branch was effectively dead.
+        $trustedAttribute = $request->attributes->get('mcp_pack.tenant_id');
+        if (is_string($trustedAttribute) && $trustedAttribute !== '') {
+            return $trustedAttribute;
         }
 
         $user = $request->user();
-        if ($user !== null && property_exists($user, 'tenant_id') && is_string($user->tenant_id)) {
-            return $user->tenant_id;
+        if ($user === null) {
+            return null;
         }
 
-        return null;
+        $tenant = data_get($user, 'tenant_id');
+        return is_string($tenant) && $tenant !== '' ? $tenant : null;
     }
 
     private function resolveActor(Request $request): mixed

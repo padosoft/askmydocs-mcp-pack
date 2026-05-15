@@ -71,10 +71,14 @@ final class StdioRunner
         try {
             $decoded = json_decode($line, true, flags: JSON_THROW_ON_ERROR);
         } catch (\JsonException $e) {
-            return JsonRpcMessage::errorResponse(0, -32700, "Parse error: {$e->getMessage()}");
+            // JSON-RPC 2.0 §5.1 — when an id cannot be detected the
+            // response `id` MUST be null. Using 0 here misled clients
+            // because they could not correlate the parse-error
+            // response to any request they made.
+            return JsonRpcMessage::errorResponse(null, -32700, "Parse error: {$e->getMessage()}");
         }
         if (! is_array($decoded)) {
-            return JsonRpcMessage::errorResponse(0, -32600, 'Invalid request: payload is not a JSON object.');
+            return JsonRpcMessage::errorResponse(null, -32600, 'Invalid request: payload is not a JSON object.');
         }
 
         $message = JsonRpcMessage::fromArray($decoded);

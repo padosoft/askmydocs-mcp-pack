@@ -48,6 +48,12 @@ class StdioRunnerTest extends TestCase
 
         $this->assertCount(2, $output);
         $this->assertSame(-32700, $output[0]['error']['code']);
+        // JSON-RPC §5.1: when the request id cannot be detected the
+        // response `id` MUST be null AND present so clients can tell
+        // a parse-failure response apart from a notification or a
+        // dropped frame.
+        $this->assertArrayHasKey('id', $output[0]);
+        $this->assertNull($output[0]['id']);
         $this->assertArrayHasKey('serverInfo', $output[1]['result']);
     }
 

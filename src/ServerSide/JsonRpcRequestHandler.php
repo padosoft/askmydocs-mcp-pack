@@ -162,7 +162,7 @@ final class JsonRpcRequestHandler
             if ($resource->uri() === $uri) {
                 $payload = $resource->read();
                 return [
-                    'contents' => $this->normaliseResourceRead($payload, $resource->mimeType()),
+                    'contents' => $this->normaliseResourceRead($payload, $uri, $resource->mimeType()),
                 ];
             }
         }
@@ -226,11 +226,23 @@ final class JsonRpcRequestHandler
      * @param string|array<int,array<string,mixed>> $payload
      * @return array<int,array<string,mixed>>
      */
-    private function normaliseResourceRead(string|array $payload, string $mimeType): array
+    private function normaliseResourceRead(string|array $payload, string $uri, string $mimeType): array
     {
         if (is_string($payload)) {
-            return [['uri' => '', 'mimeType' => $mimeType, 'text' => $payload]];
+            return [['uri' => $uri, 'mimeType' => $mimeType, 'text' => $payload]];
         }
-        return $payload;
+        // Caller returned its own block list — backfill `uri` on any
+        // block missing it so the client can always correlate content
+        // back to the requested resource (MCP spec requires `uri` per
+        // block in `resources/read` responses).
+        return array_map(
+            static function (array $block) use ($uri): array {
+                if (! isset($block['uri']) || $block['uri'] === '') {
+                    $block['uri'] = $uri;
+                }
+                return $block;
+            },
+            $payload,
+        );
     }
 }
