@@ -2,14 +2,20 @@
 
 namespace Padosoft\AskMyDocsMcpPack;
 
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Padosoft\AskMyDocsMcpPack\Console\McpPingCommand;
+use Padosoft\AskMyDocsMcpPack\Console\McpServeCommand;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpServerExposureContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerRegistryContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpToolAuthorizerContract;
 use Padosoft\AskMyDocsMcpPack\Defaults\InMemoryMcpServerRegistry;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpHostBridge;
+use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpServerExposure;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpToolAuthorizer;
+use Padosoft\AskMyDocsMcpPack\Http\McpServerHttpController;
+use Padosoft\AskMyDocsMcpPack\ServerSide\JsonRpcRequestHandler;
 use Padosoft\AskMyDocsMcpPack\Services\McpHandshakeService;
 use Padosoft\AskMyDocsMcpPack\Services\McpToolCallingService;
 use Padosoft\AskMyDocsMcpPack\Services\ToolInvoker;
@@ -23,6 +29,14 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
         $this->app->singleton(McpHostBridgeContract::class, NullMcpHostBridge::class);
         $this->app->singleton(McpServerRegistryContract::class, InMemoryMcpServerRegistry::class);
         $this->app->singleton(McpToolAuthorizerContract::class, NullMcpToolAuthorizer::class);
+        $this->app->singleton(McpServerExposureContract::class, NullMcpServerExposure::class);
+
+        $this->app->singleton(JsonRpcRequestHandler::class, function ($app) {
+            return new JsonRpcRequestHandler(
+                exposure: $app->make(McpServerExposureContract::class),
+                authorizer: $app->make(McpToolAuthorizerContract::class),
+            );
+        });
 
         $this->app->singleton(ToolInvoker::class, fn() => new ToolInvoker());
 
@@ -55,9 +69,35 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
                 __DIR__ . '/../database/migrations/' => database_path('migrations'),
             ], 'mcp-pack-migrations');
 
-            $this->commands([McpPingCommand::class]);
+            $this->commands([
+                McpPingCommand::class,
+                McpServeCommand::class,
+            ]);
         }
 
         $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
+
+        $this->registerServerSideHttpRoute();
+    }
+
+    /**
+     * v1.2.0 — register the HTTP front-door at
+     * `config('mcp-pack.server_side.http.prefix')` (default
+     * `/mcp`). Host wires its preferred middleware stack via
+     * `config('mcp-pack.server_side.http.middleware')`.
+     */
+    private function registerServerSideHttpRoute(): void
+    {
+        if (! (bool) config('mcp-pack.server_side.http.enabled', false)) {
+            return;
+        }
+
+        $prefix = (string) config('mcp-pack.server_side.http.prefix', 'mcp');
+        $middleware = (array) config('mcp-pack.server_side.http.middleware', ['api']);
+
+        Route::middleware($middleware)
+            ->prefix($prefix)
+            ->post('/', McpServerHttpController::class)
+            ->name('mcp-pack.server.http');
     }
 }

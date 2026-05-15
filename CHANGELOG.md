@@ -6,6 +6,60 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-05-15
+
+### Added — first-class server-side
+
+The package now operates in BOTH directions: as an MCP client
+(v1.0+) AND as an MCP server. Remote agents (Claude Desktop /
+Cursor / VS Code / any MCP client) can drive a Laravel app
+through stdio or HTTP using a host-supplied tool catalog.
+
+- **`McpServerExposureContract`** — host implements once to publish
+  its tool / resource / prompt catalog (tenant-scoped). Default
+  `NullMcpServerExposure` publishes nothing — production hosts
+  override.
+- **`ServerSide\JsonRpcRequestHandler`** — transport-agnostic
+  dispatcher for `initialize` / `tools/list` / `tools/call` /
+  `resources/list` / `resources/read` / `prompts/list` /
+  `prompts/get`. Enforces `McpToolAuthorizerContract` per tool +
+  maps every failure mode to JSON-RPC spec error codes (-32600
+  invalid request, -32601 method not found, -32602 invalid params,
+  -32603 internal, -32001 server-defined for auth / not-found,
+  -32700 parse).
+- **`ServerSide\StdioRunner`** — long-lived loop reading
+  newline-delimited JSON from STDIN, writing responses to STDOUT.
+  STDIN / STDOUT streams are injectable so tests drive it against
+  `php://memory`.
+- **`Http\McpServerHttpController`** — Laravel HTTP front-door
+  (POST). Host wires Sanctum / RBAC / per-tenant middleware via
+  `config('mcp-pack.server_side.http.middleware')`. Disabled by
+  default — opt in once auth stack is correct.
+- **`mcp-pack:serve`** artisan command — boots the stdio runner.
+  Wire it from Claude Desktop config / Cursor / VS Code under
+  `command: php`, `args: [/path/to/host/artisan, mcp-pack:serve]`.
+- **New config block** `mcp-pack.server_side.http.{enabled,prefix,middleware}`
+  driven by `MCP_PACK_SERVER_HTTP_*` env vars.
+
+### Tests
+
+- **70 tests / 171 assertions** all green (was 58/144 in v1.1.0).
+  +12 new tests across `JsonRpcRequestHandlerTest` (8 cases) and
+  `StdioRunnerTest` (4 cases) covering initialize / tools-list +
+  auth filter / tools-call invocation + unknown-tool / missing-name
+  param / unknown-method / notification-no-response / empty-catalog
+  + stdio: single-request / round-trip / parse-error resilience /
+  notification-drop.
+
+### Compatibility
+
+Drop-in extension on top of v1.1.x. Existing client-side surfaces
+unchanged. HTTP route registration is gated behind
+`MCP_PACK_SERVER_HTTP_ENABLED=true` — no host that doesn't opt in
+sees any new route appear.
+
+
+
 ## [1.1.0] — 2026-05-15
 
 ### Added
