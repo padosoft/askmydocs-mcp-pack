@@ -624,16 +624,19 @@ End-to-end Playwright coverage in **AskMyDocs** exercises:
 | v1.1    | ⏳ next                      | `SseJsonRpcTransport` for remote HTTP+SSE gateways; JSON-RPC `resources/list` + `resources/read`; JSON-RPC `prompts/list` + `prompts/get`. |
 | v1.2    | ⏳ planned                   | First-class **server-side** — same package exposes a Laravel app AS an MCP server (stdio long-lived runner + HTTP+SSE route + JSON-RPC handler routing `initialize` / `tools/list` / `tools/call` to host-supplied tool catalog + auth + RBAC). |
 | v1.3    | ⏳ planned                   | Per-tool circuit breaker (`open` / `half-open` / `closed` with TTL recovery) + adaptive retry budget (token-bucket per (tenant, server) with exponential backoff) + telemetry events. |
-| v1.4    | ⏳ planned (post-AskMyDocs)  | Companion admin SPA (`padosoft/askmydocs-mcp-pack-admin`) — opt-in cross-mount surface for server CRUD + handshake + tool catalog + audit log + circuit-breaker state. |
+| v1.4    | ⏳ planned                   | **Admin backend surface** — REST routes registered by the package SP at `/api/admin/mcp-pack/*` (configurable prefix): servers CRUD + handshake + tools list + paginated audit + circuit-breaker state. Middleware-driven auth (host wires Sanctum + RBAC). OpenAPI 3.1 spec + Postman collection. **NO React/Vue code** — this is the backend the separate `padosoft/askmydocs-mcp-pack-admin` SPA consumes. |
+| ─       | ─                           | ─ |
+| post-v7.0 cycle | 📅 separate package | **`padosoft/askmydocs-mcp-pack-admin`** — standalone React SPA companion. Same pattern as `padosoft/laravel-flow-admin` / `padosoft/laravel-pii-redactor-admin`. Cross-mountable under `/admin/mcp/` in any Laravel host that depends on this package + v1.4. Ships in its own repo with its own R36 cycle once AskMyDocs's v7.0/W6 host integration is green. |
 
-The v1.1 → v1.3 cycle ships **before** the AskMyDocs host adopts the
+The v1.1 → v1.4 cycle ships **before** the AskMyDocs host adopts the
 package. Consumers willing to ride v1.0 today are welcome to do so —
 the public API surface is stable and won't break before v2 — but
 AskMyDocs's own host integration is intentionally deferred to land
-over the complete v1.3 feature set in a single integration cycle
-rather than three partial passes. See
+over the complete v1.4 feature set (orchestrator + transports +
+server-side + circuit breaker + admin REST routes) in a single
+integration cycle rather than four partial passes. See
 [lopadova/AskMyDocs roadmap](https://github.com/lopadova/AskMyDocs#roadmap)
-for the host-side milestones (v7.0/W2 → W5).
+for the host-side milestones (v7.0/W2 → W6).
 
 ---
 
