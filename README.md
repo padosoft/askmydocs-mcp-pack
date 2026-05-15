@@ -7,6 +7,10 @@
 [![Tests](https://github.com/padosoft/askmydocs-mcp-pack/actions/workflows/tests.yml/badge.svg)](https://github.com/padosoft/askmydocs-mcp-pack/actions)
 [![Total Downloads](https://img.shields.io/packagist/dt/padosoft/askmydocs-mcp-pack.svg?style=flat-square)](https://packagist.org/packages/padosoft/askmydocs-mcp-pack)
 
+![AskMyDocs MCP Pack — Web Panel Banner](resources/AskMyDocs-MCP-Pack-Web-Panel-Banner.png)
+
+![AskMyDocs MCP Pack — Admin Dashboard](resources/screenshoots/AskMyDocs-MCP-Pack-Web-Panel-Dashboard.png)
+
 > **Framework-agnostic [Model Context Protocol](https://modelcontextprotocol.io) plumbing for Laravel.**
 > Contracts, multi-turn tool-calling orchestrator, stdio + HTTP transports, audit trail, RBAC hooks.
 > Powers [AskMyDocs](https://github.com/lopadova/AskMyDocs) and reusable in any Laravel AI app.
@@ -35,19 +39,20 @@ cp -r vendor/padosoft/askmydocs-mcp-pack/.claude ./
 
 1. [Why this package?](#why-this-package)
 2. [Features at a glance](#features-at-a-glance)
-3. [Comparison vs alternatives](#comparison-vs-alternatives)
-4. [Installation](#installation)
-5. [Quick start (3 minutes)](#quick-start-3-minutes)
-6. [Architecture](#architecture)
-7. [Core concepts](#core-concepts)
-8. [Configuration reference](#configuration-reference)
-9. [Recipes](#recipes)
-10. [Extension points](#extension-points)
-11. [Testing](#testing)
-12. [Compatibility matrix](#compatibility-matrix)
-13. [Roadmap](#roadmap)
-14. [Changelog](#changelog)
-15. [License](#license)
+3. [Screenshots — Admin Web Panel](#screenshots--admin-web-panel)
+4. [Comparison vs alternatives](#comparison-vs-alternatives)
+5. [Installation](#installation)
+6. [Quick start (3 minutes)](#quick-start-3-minutes)
+7. [Architecture](#architecture)
+8. [Core concepts](#core-concepts)
+9. [Configuration reference](#configuration-reference)
+10. [Recipes](#recipes)
+11. [Extension points](#extension-points)
+12. [Testing](#testing)
+13. [Compatibility matrix](#compatibility-matrix)
+14. [Roadmap](#roadmap)
+15. [Changelog](#changelog)
+16. [License](#license)
 
 ---
 
@@ -100,6 +105,66 @@ so the next Laravel AI app does not have to reinvent it.
 | 📦 | **Zero-AI-SDK lock-in** — pluggable host bridge; works with any provider. |
 | 📊 | **Production telemetry** — every tool call carries `duration_ms`, status, and error excerpt. |
 | 🧰 | **Artisan diagnostics** — `php artisan mcp-pack:ping` walks the registry and prints a per-server status table. |
+
+---
+
+## Screenshots — Admin Web Panel
+
+The companion SPA (`padosoft/askmydocs-mcp-pack-admin`, post-v7.0
+cycle) consumes the v1.4 admin REST routes shipped here. Light + dark
+themes ship out of the box; every action is keyboard-reachable and
+audit-logged.
+
+### Dashboard
+
+The landing surface — fleet health, breaker open-count, recent audit
+volume per server, and at-a-glance latency percentiles.
+
+| Light                                                                                | Dark                                                                                       |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| ![Dashboard — light](resources/screenshoots/AskMyDocs-MCP-Pack-Web-Panel-Dashboard.png) | ![Dashboard — dark](resources/screenshoots/AskMyDocs-MCP-Pack-Web-Panel-Dashboard-dark.png) |
+
+### Servers + per-server detail + tools + circuit breakers
+
+Servers list filters by tenant + transport + status. Drill in for the
+handshake-cached tool catalog, the most recent audit slice, and the
+breaker state for every (server, tool) pair — read from
+`CircuitBreaker::peekState()` so the dashboard NEVER consumes the
+half-open probe slot just by polling.
+
+![Servers list](resources/screenshoots/AskMyDocs-MCP-Pack-Web-Panel-Servers.png)
+
+![Server detail](resources/screenshoots/AskMyDocs-MCP-Pack-Web-Panel-Server-details.png)
+
+![Tools](resources/screenshoots/AskMyDocs-MCP-Pack-Web-Panel-Tools.png)
+
+![Circuit breakers](resources/screenshoots/AskMyDocs-MCP-Pack-Web-Panel-Circuit-Breakers.png)
+
+### Audit + audit detail + per-server audit
+
+Paginated audit query over the configurable `mcp-pack.audit_model`,
+tenant-scoped by default. Filters: `server_id`, `tool_name`,
+`status`, date range. Click a row for the SHA-256 input/output
+hashes + redacted error excerpt + duration.
+
+![Audit logs](resources/screenshoots/AskMyDocs-MCP-Pack-Web-Panel-Audit-logs.png)
+
+![Audit log detail](resources/screenshoots/AskMyDocs-MCP-Pack-Web-Panel-Audit-logs-details.png)
+
+![Per-server audit slice](resources/screenshoots/AskMyDocs-MCP-Pack-Web-Panel-Server-details-audit.png)
+
+### Prompts + API playground + Settings
+
+Prompt catalog (JSON-RPC `prompts/list` / `prompts/get`), an
+embedded API playground for verifying the routes against the host's
+auth middleware, and a settings surface mirroring the
+`mcp-pack.*` config block.
+
+![Prompts](resources/screenshoots/AskMyDocs-MCP-Pack-Web-Panel-Prompt.png)
+
+![API playground](resources/screenshoots/AskMyDocs-MCP-Pack-Web-Panel-API-playground.png)
+
+![Settings](resources/screenshoots/AskMyDocs-MCP-Pack-Web-Panel-Settings.png)
 
 ---
 
