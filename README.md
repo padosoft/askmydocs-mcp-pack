@@ -110,8 +110,8 @@ so the next Laravel AI app does not have to reinvent it.
 
 ## Screenshots — Admin Web Panel
 
-The companion SPA (`padosoft/askmydocs-mcp-pack-admin`, post-v7.0
-cycle) consumes the v1.4 admin REST routes shipped here. Light + dark
+The companion SPA ([`padosoft/askmydocs-mcp-pack-admin`](https://github.com/padosoft/askmydocs-mcp-pack-admin),
+post-v7.0 cycle) consumes the v1.4 admin REST routes shipped here. Light + dark
 themes ship out of the box; every action is keyboard-reachable and
 audit-logged.
 
