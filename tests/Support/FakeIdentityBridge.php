@@ -28,8 +28,7 @@ use Padosoft\AskMyDocsMcpPack\Support\HostUserPreferences;
  *     and ALWAYS succeeds unless `$forceNotImplemented` is on. This
  *     deliberate asymmetry is because the SPA tests want to assert
  *     "the bridge was called with these prefs" — flip
- *     `$forceNotImplemented` (or set `$savePreferencesNotImplemented`)
- *     to simulate the 501 path.
+ *     `$forceNotImplemented` to simulate the 501 path.
  *   - When `$forceNotImplemented` is `true`, every method throws —
  *     useful for asserting the 501 envelope at the controller layer.
  *
