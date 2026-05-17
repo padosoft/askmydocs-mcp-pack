@@ -4,6 +4,7 @@ namespace Padosoft\AskMyDocsMcpPack\Tests\Support;
 
 use Padosoft\AskMyDocsMcpPack\Contracts\Concerns\HasIdentitySurface;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeIdentityContract;
 use Padosoft\AskMyDocsMcpPack\Exceptions\HostFeatureNotImplementedException;
 use Padosoft\AskMyDocsMcpPack\Support\HostApiKey;
 use Padosoft\AskMyDocsMcpPack\Support\HostChatResponse;
@@ -13,16 +14,29 @@ use Padosoft\AskMyDocsMcpPack\Support\HostUser;
 use Padosoft\AskMyDocsMcpPack\Support\HostUserPreferences;
 
 /**
- * v1.5.0 — drop-in host bridge for W1.A controller tests. Each
+ * v1.5.0 — drop-in identity bridge for W1.A controller tests. Each
  * identity method is overridable via a public property so tests
  * opt in to a per-scenario stub without subclassing.
  *
- * When a property is left at its default `null`, the method throws
- * {@see HostFeatureNotImplementedException} — same behaviour as
- * {@see HasIdentitySurface}'s default. Tests then assert the
- * controller-level translation into HTTP 501.
+ * Default-behaviour rules:
+ *   - `currentUser()` returns `$user` (default `null`).
+ *   - `listTenants()`, `listApiKeys()`, `createApiKey()`,
+ *     `revokeApiKey()` throw `HostFeatureNotImplementedException`
+ *     when their corresponding property is `null` — matching
+ *     {@see HasIdentitySurface}'s 501-via-throw default.
+ *   - `savePreferences()` records the call into `$savedPreferences`
+ *     and ALWAYS succeeds unless `$forceNotImplemented` is on. This
+ *     deliberate asymmetry is because the SPA tests want to assert
+ *     "the bridge was called with these prefs" — flip
+ *     `$forceNotImplemented` (or set `$savePreferencesNotImplemented`)
+ *     to simulate the 501 path.
+ *   - When `$forceNotImplemented` is `true`, every method throws —
+ *     useful for asserting the 501 envelope at the controller layer.
+ *
+ * Implements BOTH the base contract and the identity sub-interface
+ * so it can be bound to either container key.
  */
-final class FakeIdentityBridge implements McpHostBridgeContract
+final class FakeIdentityBridge implements McpHostBridgeContract, McpHostBridgeIdentityContract
 {
     use HasIdentitySurface;
 

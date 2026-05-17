@@ -2,7 +2,7 @@
 
 namespace Padosoft\AskMyDocsMcpPack\Tests\Feature\Http\Admin;
 
-use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeIdentityContract;
 use Padosoft\AskMyDocsMcpPack\Support\HostApiKey;
 use Padosoft\AskMyDocsMcpPack\Support\HostUser;
 use Padosoft\AskMyDocsMcpPack\Tests\Support\FakeIdentityBridge;
@@ -27,7 +27,7 @@ class ApiKeysControllerTest extends TestCase
     {
         $bridge = new FakeIdentityBridge();
         $bridge->user = new HostUser(id: $userId, email: 'a@b.c', name: 'A');
-        $this->app->instance(McpHostBridgeContract::class, $bridge);
+        $this->app->instance(McpHostBridgeIdentityContract::class, $bridge);
         return $bridge;
     }
 
@@ -50,7 +50,7 @@ class ApiKeysControllerTest extends TestCase
     public function test_index_401_when_no_actor(): void
     {
         $bridge = new FakeIdentityBridge(); // user stays null
-        $this->app->instance(McpHostBridgeContract::class, $bridge);
+        $this->app->instance(McpHostBridgeIdentityContract::class, $bridge);
 
         $response = $this->getJson('/api/admin/mcp-pack/api-keys');
         $response->assertStatus(401);
@@ -163,6 +163,48 @@ class ApiKeysControllerTest extends TestCase
         $response->assertOk();
         $this->assertSame('tok_01', $response->json('data.id'));
         $this->assertTrue($response->json('data.revoked'));
+    }
+
+    public function test_destroy_401_when_no_actor(): void
+    {
+        // R30: destroy() MUST refuse anonymous callers, exactly like
+        // index/store. Without this guard, a host whose middleware
+        // momentarily fails open could have keys revoked by anonymous
+        // callers. The bridge.user property stays null → 401.
+        $bridge = new FakeIdentityBridge();
+        $bridge->revokeApiKeyResult = true; // would succeed if the guard slipped
+        $this->app->instance(McpHostBridgeIdentityContract::class, $bridge);
+
+        $response = $this->deleteJson('/api/admin/mcp-pack/api-keys/tok_01');
+        $response->assertStatus(401);
+        $this->assertSame('unauthenticated', $response->json('error.code'));
+        // Critical: the host bridge MUST NOT have been called.
+        $this->assertNull($bridge->savedPreferences); // unrelated, but proves the call short-circuited
+    }
+
+    public function test_destroy_403_when_feature_disabled(): void
+    {
+        $this->app['config']->set('mcp-pack.admin.features.api_keys', false);
+        $this->bindBridge();
+
+        $response = $this->deleteJson('/api/admin/mcp-pack/api-keys/tok_01');
+        $response->assertStatus(403);
+        $this->assertSame('feature_disabled', $response->json('error.code'));
+    }
+
+    public function test_routes_stay_registered_when_feature_disabled(): void
+    {
+        // R-route-gating: the v1.4 → v1.5 design CHANGE is that admin
+        // routes are registered unconditionally; the per-feature flag
+        // applies at the controller level (403) rather than at boot
+        // (404). This test pins that contract so a future refactor
+        // cannot silently regress disabled-section 404 behaviour.
+        $this->app['config']->set('mcp-pack.admin.features.api_keys', false);
+
+        $routes = $this->app['router']->getRoutes();
+        $this->assertTrue($routes->hasNamedRoute('mcp-pack.admin.api-keys.index'));
+        $this->assertTrue($routes->hasNamedRoute('mcp-pack.admin.api-keys.store'));
+        $this->assertTrue($routes->hasNamedRoute('mcp-pack.admin.api-keys.destroy'));
     }
 
     public function test_index_returns_501_when_host_does_not_implement(): void

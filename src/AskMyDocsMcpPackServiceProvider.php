@@ -10,6 +10,7 @@ use Illuminate\Support\ServiceProvider;
 use Padosoft\AskMyDocsMcpPack\Console\McpPingCommand;
 use Padosoft\AskMyDocsMcpPack\Console\McpServeCommand;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeIdentityContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerExposureContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerRegistryContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpToolAuthorizerContract;
@@ -42,6 +43,22 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
         $this->app->singleton(McpServerRegistryContract::class, InMemoryMcpServerRegistry::class);
         $this->app->singleton(McpToolAuthorizerContract::class, NullMcpToolAuthorizer::class);
         $this->app->singleton(McpServerExposureContract::class, NullMcpServerExposure::class);
+
+        // v1.5.0 — admin REST extension. The identity sub-interface is
+        // resolved separately: if the host bound an `McpHostBridgeContract`
+        // implementation that ALSO implements
+        // `McpHostBridgeIdentityContract`, use it directly. Otherwise
+        // fall back to `NullMcpHostBridge` which implements both. The
+        // admin controllers type-hint against the sub-interface, so an
+        // unwired host degrades to HTTP 501 — never falling through to
+        // the host's legacy bridge silently.
+        $this->app->singleton(McpHostBridgeIdentityContract::class, function ($app) {
+            $bridge = $app->make(McpHostBridgeContract::class);
+            if ($bridge instanceof McpHostBridgeIdentityContract) {
+                return $bridge;
+            }
+            return $app->make(NullMcpHostBridge::class);
+        });
 
         $this->app->singleton(JsonRpcRequestHandler::class, function ($app) {
             return new JsonRpcRequestHandler(
@@ -137,28 +154,27 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
             Route::get('audit', AuditController::class)->name('mcp-pack.admin.audit');
             Route::get('circuit-breaker', CircuitBreakerController::class)->name('mcp-pack.admin.circuit-breaker');
 
-            // v1.5.0 — identity surface (W1.A). Each route is gated
-            // inside the controller by `mcp-pack.admin.features.*`
-            // so operators can hide a section per-tenant if needed.
-            if ((bool) config('mcp-pack.admin.features.me', true)) {
-                Route::get('me', [MeController::class, 'show'])->name('mcp-pack.admin.me.show');
-                Route::post('me/preferences', [MeController::class, 'updatePreferences'])->name('mcp-pack.admin.me.preferences');
-            }
-            if ((bool) config('mcp-pack.admin.features.tenants', true)) {
-                Route::get('tenants', [TenantsController::class, 'index'])->name('mcp-pack.admin.tenants.index');
-            }
-            if ((bool) config('mcp-pack.admin.features.api_keys', true)) {
-                Route::get('api-keys', [ApiKeysController::class, 'index'])->name('mcp-pack.admin.api-keys.index');
-                Route::post('api-keys', [ApiKeysController::class, 'store'])->name('mcp-pack.admin.api-keys.store');
-                Route::delete('api-keys/{id}', [ApiKeysController::class, 'destroy'])
+            // v1.5.0 — identity surface (W1.A). Routes are registered
+            // UNCONDITIONALLY; the per-feature flag check happens
+            // INSIDE the controller via `ResolvesAdminContext::featureGate()`,
+            // which returns HTTP 403 `feature_disabled` (not 404). This
+            // way the SPA can distinguish "the operator turned this
+            // section off" from "the route does not exist on this
+            // package version" — and the contract documented in
+            // `config/mcp-pack.php` matches actual behaviour.
+            Route::get('me', [MeController::class, 'show'])->name('mcp-pack.admin.me.show');
+            Route::post('me/preferences', [MeController::class, 'updatePreferences'])->name('mcp-pack.admin.me.preferences');
+            Route::get('tenants', [TenantsController::class, 'index'])->name('mcp-pack.admin.tenants.index');
+            Route::get('api-keys', [ApiKeysController::class, 'index'])->name('mcp-pack.admin.api-keys.index');
+            Route::post('api-keys', [ApiKeysController::class, 'store'])->name('mcp-pack.admin.api-keys.store');
+            Route::delete('api-keys/{id}', [ApiKeysController::class, 'destroy'])
                     // R19 / `tok_01`-style ids include `_` so we
                     // ALLOW underscore on the URL segment (it cannot
                     // reach a SQL LIKE; the host owns the lookup).
                     // The forbidden set is `%`, `*`, whitespace,
                     // path separators.
-                    ->where('id', '[A-Za-z0-9._\-]+')
-                    ->name('mcp-pack.admin.api-keys.destroy');
-            }
+                ->where('id', '[A-Za-z0-9._\-]+')
+                ->name('mcp-pack.admin.api-keys.destroy');
         });
     }
 

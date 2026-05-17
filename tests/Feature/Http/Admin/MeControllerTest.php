@@ -2,7 +2,7 @@
 
 namespace Padosoft\AskMyDocsMcpPack\Tests\Feature\Http\Admin;
 
-use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeIdentityContract;
 use Padosoft\AskMyDocsMcpPack\Support\HostUser;
 use Padosoft\AskMyDocsMcpPack\Tests\Support\FakeIdentityBridge;
 use Padosoft\AskMyDocsMcpPack\Tests\TestCase;
@@ -25,7 +25,7 @@ class MeControllerTest extends TestCase
     private function bindBridge(): FakeIdentityBridge
     {
         $bridge = new FakeIdentityBridge();
-        $this->app->instance(McpHostBridgeContract::class, $bridge);
+        $this->app->instance(McpHostBridgeIdentityContract::class, $bridge);
         return $bridge;
     }
 

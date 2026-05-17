@@ -4,7 +4,7 @@ namespace Padosoft\AskMyDocsMcpPack\Http\Admin;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeIdentityContract;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\ResolvesAdminContext;
 use Padosoft\AskMyDocsMcpPack\Support\HostTenant;
 
@@ -26,7 +26,7 @@ final class TenantsController
     use ResolvesAdminContext;
 
     public function __construct(
-        private readonly McpHostBridgeContract $bridge,
+        private readonly McpHostBridgeIdentityContract $bridge,
     ) {}
 
     public function index(Request $request): JsonResponse

@@ -37,8 +37,11 @@ final class CreateApiKeyRequest extends FormRequest
             'name' => ['required', 'string', 'min:1', 'max:150'],
             'scopes' => ['required', 'array', 'min:1'],
             // R19: the regex is the load-bearing escape gate — every
-            // scope value must be lower-case alphanumerics + `.`,
-            // `_`, `-`. No `%`, no spaces, no SQL LIKE wildcards.
+            // scope value must be lower-case alphanumerics + `.` + `-`.
+            // Underscores `_` are EXCLUDED because they are the
+            // single-character SQL LIKE wildcard; admitting them would
+            // let an attacker construct a scope that matches arbitrary
+            // patterns downstream. No `%`, no spaces, no whitespace.
             'scopes.*' => ['required', 'string', 'max:100', 'regex:/^[a-z0-9.\-]+$/'],
         ];
     }
@@ -54,10 +57,14 @@ final class CreateApiKeyRequest extends FormRequest
     }
 
     /**
-     * After basic rules pass: reject control characters in `name`
-     * and dedupe scopes. Control-character rejection prevents an
-     * attacker from sneaking `\n` / `\0` into a log line that the
-     * SPA later renders verbatim (defensive against log-injection).
+     * After basic rules pass: reject control characters in `name`.
+     * Control-character rejection prevents an attacker from sneaking
+     * `\n` / `\0` into a log line that the SPA later renders verbatim
+     * (defensive against log-injection).
+     *
+     * Note: scope dedupe happens later in {@see payload()}, not here —
+     * the validator stage only checks correctness, the dedupe is a
+     * normalisation concern.
      */
     public function withValidator(\Illuminate\Validation\Validator $validator): void
     {

@@ -4,6 +4,7 @@ namespace Padosoft\AskMyDocsMcpPack\Tests\Support;
 
 use Padosoft\AskMyDocsMcpPack\Contracts\Concerns\HasIdentitySurface;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeIdentityContract;
 use Padosoft\AskMyDocsMcpPack\Support\HostChatResponse;
 use Padosoft\AskMyDocsMcpPack\Support\HostChatTurn;
 
@@ -12,11 +13,13 @@ use Padosoft\AskMyDocsMcpPack\Support\HostChatTurn;
  * Records every {@see HostChatTurn} it sees so tests can assert
  * what the orchestrator handed to the host.
  *
- * v1.5.0 — pulls in `HasIdentitySurface` so the orchestrator tests
- * compile against the extended contract surface; identity methods
- * throw 501 unless a test overrides them.
+ * v1.5.0 — also implements {@see McpHostBridgeIdentityContract} via
+ * {@see HasIdentitySurface}; identity methods throw 501 unless a
+ * test overrides them. Implementing both interfaces lets a test
+ * `bind(McpHostBridgeIdentityContract::class, $fake)` for admin
+ * controller tests that want the orchestrator surface too.
  */
-final class FakeHostBridge implements McpHostBridgeContract
+final class FakeHostBridge implements McpHostBridgeContract, McpHostBridgeIdentityContract
 {
     use HasIdentitySurface;
 

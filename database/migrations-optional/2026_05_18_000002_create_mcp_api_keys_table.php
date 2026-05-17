@@ -16,6 +16,11 @@ use Illuminate\Support\Facades\Schema;
  * `McpHostBridgeContract::{listApiKeys,createApiKey,revokeApiKey}()`.
  *
  * Schema:
+ *   - `id` is a STRING primary key (`tok_*` format) — matches the
+ *     wire contract on `HostApiKey::$id` and the URL regex in
+ *     `AskMyDocsMcpPackServiceProvider::registerAdminRoutes()` which
+ *     accepts `[A-Za-z0-9._\-]+`. Hosts mint these via
+ *     `Str::random()` + an opaque prefix at creation time.
  *   - `hashed_token` is the SHA-256 (or argon2) digest of the
  *     plaintext token. The plaintext is surfaced exactly once at
  *     creation time and is never persisted.
@@ -35,7 +40,10 @@ return new class extends Migration
         }
 
         Schema::create('mcp_api_keys', function (Blueprint $table) {
-            $table->id();
+            // String PK to match the wire contract (`tok_*` ids). Hosts
+            // own the id format — the controller / FormRequest do not
+            // assume integers anywhere.
+            $table->string('id', 64)->primary();
             $table->unsignedBigInteger('user_id')->nullable()->index();
             $table->string('name', 150);
             $table->json('scopes');

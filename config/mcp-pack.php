@@ -130,7 +130,16 @@ return [
         | v1.5.0 — per-feature flags. Each defaults to `true` when
         | `admin.enabled=true`; operators flip a single flag to `false`
         | to hide a section from the SPA without forking the package.
-        | Disabled sections answer HTTP 403 `feature_disabled`.
+        |
+        | Behaviour when a flag is `false`: the route is STILL
+        | registered (unconditional registration is intentional) and
+        | the controller answers HTTP 403 `feature_disabled` via
+        | `ResolvesAdminContext::featureGate()`. This way the SPA can
+        | distinguish "the operator turned this section off" (403)
+        | from "this package version does not implement the section"
+        | (404 — never reached because routes are registered) — and
+        | hot-flipping the flag at runtime works without rebooting
+        | the workers.
         |
         |   - `me`        — `GET /me`, `POST /me/preferences`
         |   - `tenants`   — `GET /tenants`

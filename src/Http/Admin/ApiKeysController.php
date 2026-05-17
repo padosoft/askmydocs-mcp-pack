@@ -4,7 +4,7 @@ namespace Padosoft\AskMyDocsMcpPack\Http\Admin;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeIdentityContract;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\ResolvesAdminContext;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\CreateApiKeyRequest;
 use Padosoft\AskMyDocsMcpPack\Support\HostApiKey;
@@ -24,7 +24,7 @@ final class ApiKeysController
     use ResolvesAdminContext;
 
     public function __construct(
-        private readonly McpHostBridgeContract $bridge,
+        private readonly McpHostBridgeIdentityContract $bridge,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -101,6 +101,21 @@ final class ApiKeysController
         }
 
         return $this->withHostBridge(function () use ($id): JsonResponse {
+            // R30 — require an authenticated actor before reaching the
+            // host's revoke hook. Without this, a host whose middleware
+            // momentarily fails open (or runs the package outside the
+            // intended auth stack) would have a key revoked by
+            // anonymous callers. Mirrors the index/store guards above.
+            $user = $this->bridge->currentUser();
+            if ($user === null) {
+                return new JsonResponse([
+                    'error' => [
+                        'code' => 'unauthenticated',
+                        'message' => 'No authenticated actor on this request.',
+                    ],
+                ], 401);
+            }
+
             $revoked = $this->bridge->revokeApiKey($id);
             if (! $revoked) {
                 // R14: explicit 404 — never 200 with `success=false`.
