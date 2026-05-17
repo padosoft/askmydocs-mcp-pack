@@ -10,6 +10,7 @@ use Illuminate\Support\ServiceProvider;
 use Padosoft\AskMyDocsMcpPack\Console\McpPingCommand;
 use Padosoft\AskMyDocsMcpPack\Console\McpServeCommand;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeIdentityContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerExposureContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerRegistryContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpToolAuthorizerContract;
@@ -17,9 +18,12 @@ use Padosoft\AskMyDocsMcpPack\Defaults\InMemoryMcpServerRegistry;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpHostBridge;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpServerExposure;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpToolAuthorizer;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\ApiKeysController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\AuditController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\CircuitBreakerController;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\MeController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\ServersController;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\TenantsController;
 use Padosoft\AskMyDocsMcpPack\Http\McpServerHttpController;
 use Padosoft\AskMyDocsMcpPack\Resilience\CircuitBreaker;
 use Padosoft\AskMyDocsMcpPack\Resilience\ResilienceMediator;
@@ -39,6 +43,22 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
         $this->app->singleton(McpServerRegistryContract::class, InMemoryMcpServerRegistry::class);
         $this->app->singleton(McpToolAuthorizerContract::class, NullMcpToolAuthorizer::class);
         $this->app->singleton(McpServerExposureContract::class, NullMcpServerExposure::class);
+
+        // v1.5.0 — admin REST extension. The identity sub-interface is
+        // resolved separately: if the host bound an `McpHostBridgeContract`
+        // implementation that ALSO implements
+        // `McpHostBridgeIdentityContract`, use it directly. Otherwise
+        // fall back to `NullMcpHostBridge` which implements both. The
+        // admin controllers type-hint against the sub-interface, so an
+        // unwired host degrades to HTTP 501 — never falling through to
+        // the host's legacy bridge silently.
+        $this->app->singleton(McpHostBridgeIdentityContract::class, function ($app) {
+            $bridge = $app->make(McpHostBridgeContract::class);
+            if ($bridge instanceof McpHostBridgeIdentityContract) {
+                return $bridge;
+            }
+            return $app->make(NullMcpHostBridge::class);
+        });
 
         $this->app->singleton(JsonRpcRequestHandler::class, function ($app) {
             return new JsonRpcRequestHandler(
@@ -88,6 +108,19 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
                 __DIR__ . '/../database/migrations/' => database_path('migrations'),
             ], 'mcp-pack-migrations');
 
+            // v1.5.0 — opt-in identity-surface migrations (user
+            // preferences + API keys). Published under the same
+            // `mcp-pack-migrations` tag for ergonomics PLUS a
+            // dedicated tag so a host can publish ONLY the identity
+            // tables without re-publishing the audit table.
+            $this->publishes([
+                __DIR__ . '/../database/migrations-optional/' => database_path('migrations'),
+            ], 'mcp-pack-migrations');
+
+            $this->publishes([
+                __DIR__ . '/../database/migrations-optional/' => database_path('migrations'),
+            ], 'mcp-pack-identity-migrations');
+
             $this->commands([
                 McpPingCommand::class,
                 McpServeCommand::class,
@@ -120,6 +153,28 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
             Route::get('servers/{id}/tools', [ServersController::class, 'tools'])->name('mcp-pack.admin.servers.tools');
             Route::get('audit', AuditController::class)->name('mcp-pack.admin.audit');
             Route::get('circuit-breaker', CircuitBreakerController::class)->name('mcp-pack.admin.circuit-breaker');
+
+            // v1.5.0 — identity surface (W1.A). Routes are registered
+            // UNCONDITIONALLY; the per-feature flag check happens
+            // INSIDE the controller via `ResolvesAdminContext::featureGate()`,
+            // which returns HTTP 403 `feature_disabled` (not 404). This
+            // way the SPA can distinguish "the operator turned this
+            // section off" from "the route does not exist on this
+            // package version" — and the contract documented in
+            // `config/mcp-pack.php` matches actual behaviour.
+            Route::get('me', [MeController::class, 'show'])->name('mcp-pack.admin.me.show');
+            Route::post('me/preferences', [MeController::class, 'updatePreferences'])->name('mcp-pack.admin.me.preferences');
+            Route::get('tenants', [TenantsController::class, 'index'])->name('mcp-pack.admin.tenants.index');
+            Route::get('api-keys', [ApiKeysController::class, 'index'])->name('mcp-pack.admin.api-keys.index');
+            Route::post('api-keys', [ApiKeysController::class, 'store'])->name('mcp-pack.admin.api-keys.store');
+            Route::delete('api-keys/{id}', [ApiKeysController::class, 'destroy'])
+                    // R19 / `tok_01`-style ids include `_` so we
+                    // ALLOW underscore on the URL segment (it cannot
+                    // reach a SQL LIKE; the host owns the lookup).
+                    // The forbidden set is `%`, `*`, whitespace,
+                    // path separators.
+                ->where('id', '[A-Za-z0-9._\-]+')
+                ->name('mcp-pack.admin.api-keys.destroy');
         });
     }
 

@@ -20,6 +20,20 @@ use Padosoft\AskMyDocsMcpPack\Support\HostChatTurn;
  * extras map. The v1.0 orchestrator does not coalesce duplicate
  * tool-call payloads automatically — the hint is for hosts that want
  * to layer their own dedupe / cache in front of the bridge.
+ *
+ * ## v1.5.0 — admin REST extension via sub-interfaces
+ *
+ * The v1.5 admin REST surface needs identity (`/me`, `/tenants`,
+ * `/api-keys`) and (in W1.C) audit-replay + breaker-reset hooks. To
+ * stay backwards-compatible with v1.0..v1.4 host bridges, those
+ * methods live in {@see McpHostBridgeIdentityContract} which extends
+ * this contract. Hosts opt in by implementing the sub-interface (or
+ * by `use`-ing {@see Concerns\HasIdentitySurface} for safe defaults).
+ *
+ * Adding methods to a published interface is BC-breaking in PHP, so
+ * this base contract STAYS at the v1.0 shape — `chat()` +
+ * `supportsToolCalling()`. Existing v1.4 hosts keep compiling
+ * unchanged after the upgrade to v1.5.
  */
 interface McpHostBridgeContract
 {

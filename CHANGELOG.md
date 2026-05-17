@@ -6,6 +6,95 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### v1.5.0 — REST surface extension (W1.A — identity surface)
+
+The package is growing a 16-endpoint REST surface across four
+sub-waves (W1.A → W1.D) so the standalone
+`padosoft/askmydocs-mcp-pack-admin` SPA can run against live data.
+W1.A ships the identity layer.
+
+#### Added — `McpHostBridgeContract` identity surface
+
+Nine new optional methods on the contract — every existing host
+bridge keeps compiling because the new methods either inherit a
+sensible default from the new
+`Padosoft\AskMyDocsMcpPack\Contracts\Concerns\HasIdentitySurface`
+trait, OR throw `HostFeatureNotImplementedException` which the
+admin controllers translate into HTTP 501.
+
+- `currentUser(): ?HostUser` — actor identity for `GET /me`.
+- `listTenants(): array<HostTenant>` — tenant switcher payload.
+- `listApiKeys(int|string|null $userId): array<HostApiKey>` —
+  R30-scoped to the active user when `$userId !== null`.
+- `createApiKey(array $attrs): HostApiKey` — plaintext token in
+  `HostApiKey::$plaintext`, surfaced exactly once at create time.
+- `revokeApiKey(string $id): bool` — `false` is mapped to HTTP 404
+  by `ApiKeysController::destroy`.
+- `savePreferences(int|string $userId, array $prefs): HostUserPreferences`
+  — write path locked to `currentUser()->id` server-side (R30).
+- `auditFor(int|string $id)` / `replayAudit()` / `resetBreaker()` —
+  signatures shipped now, wired in W1.C.
+
+#### Added — value objects under `src/Support/`
+
+- `HostUser` — readonly, `fromArray()` / `toArray()`.
+- `HostTenant` — readonly, with `primary` flag.
+- `HostApiKey` — readonly; `toArray()` omits the plaintext, only
+  `toCreateArray()` exposes it.
+- `HostUserPreferences` — readonly, schema-less `values` bag.
+
+#### Added — new controllers under `src/Http/Admin/`
+
+- `MeController` — `GET /me` + `POST /me/preferences`.
+  Returns HTTP 401 (`unauthenticated`) when no actor is bound.
+- `TenantsController` — `GET /tenants` with `meta.active_tenant_id`.
+- `ApiKeysController` — `GET/POST/DELETE /api-keys`. Scopes are
+  validated against `^[a-z0-9.-]+$` (R19 — input-escape-complete:
+  no `%`, no `_`, no SQL LIKE wildcards). DELETE returns 404 when
+  the host reports `revokeApiKey(): false`.
+
+#### Added — FormRequest classes under `src/Http/Admin/Requests/`
+
+- `UpdatePreferencesRequest` — `preferences` REQUIRED array, key
+  ≤ 128 chars, JSON-serialisable bag.
+- `CreateApiKeyRequest` — `name` 1..150 no control chars,
+  `scopes` non-empty list of `^[a-z0-9.-]+$` strings deduped.
+
+#### Added — per-feature flags
+
+- `mcp-pack.admin.features.{me,tenants,api_keys}` — each defaults
+  to `true` when `admin.enabled=true`. Setting a flag to `false`
+  returns HTTP 403 `feature_disabled` for that section.
+
+#### Added — opt-in publishable migrations
+
+Two new migrations under `database/migrations-optional/`,
+published via `--tag=mcp-pack-migrations` (alongside the audit
+table) OR `--tag=mcp-pack-identity-migrations` for identity-only
+publication. Hosts with their own preferences / API-key stores
+skip publication.
+
+- `mcp_user_preferences` — `(user_id, key) unique, value JSON`.
+- `mcp_api_keys` — `(hashed_token unique, name, scopes JSON,
+  last_used_at, created_by)`.
+
+#### Added — `HostFeatureNotImplementedException`
+
+A new package exception extending `McpException`. The admin
+controllers catch it and emit HTTP 501 (`feature_not_implemented`)
+with the offending method name in the message — the SPA renders a
+graceful degraded state instead of a generic 500.
+
+#### Tests
+
+42 new tests across 7 files; new total: 158 (was 116).
+
+#### Sub-waves not yet shipped
+
+- W1.B — Servers CRUD + `GET /tools` + paginated registry.
+- W1.C — Audit drilldown + replay + breaker reset (atomic R21).
+- W1.D — Resources + Prompts + SSE + OpenAPI + `v1.5.0` tag.
+
 ## [1.4.0] — 2026-05-15
 
 ### Added — admin REST backend
