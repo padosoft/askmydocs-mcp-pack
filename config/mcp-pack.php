@@ -125,6 +125,25 @@ return [
         'middleware' => array_values(array_filter(
             array_map('trim', explode(',', (string) env('MCP_PACK_ADMIN_MIDDLEWARE', 'api'))),
         )),
+
+        /*
+        | v1.5.0 — per-feature flags. Each defaults to `true` when
+        | `admin.enabled=true`; operators flip a single flag to `false`
+        | to hide a section from the SPA without forking the package.
+        | Disabled sections answer HTTP 403 `feature_disabled`.
+        |
+        |   - `me`        — `GET /me`, `POST /me/preferences`
+        |   - `tenants`   — `GET /tenants`
+        |   - `api_keys`  — `GET/POST/DELETE /api-keys`
+        |
+        | W1.B / W1.C / W1.D add more keys (servers_write, replay,
+        | breaker_reset, resources, prompts, events, openapi).
+        */
+        'features' => [
+            'me' => env('MCP_PACK_ADMIN_FEATURE_ME', true),
+            'tenants' => env('MCP_PACK_ADMIN_FEATURE_TENANTS', true),
+            'api_keys' => env('MCP_PACK_ADMIN_FEATURE_API_KEYS', true),
+        ],
     ],
 
     'resilience' => [

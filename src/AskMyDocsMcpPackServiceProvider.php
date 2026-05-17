@@ -17,9 +17,12 @@ use Padosoft\AskMyDocsMcpPack\Defaults\InMemoryMcpServerRegistry;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpHostBridge;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpServerExposure;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpToolAuthorizer;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\ApiKeysController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\AuditController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\CircuitBreakerController;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\MeController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\ServersController;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\TenantsController;
 use Padosoft\AskMyDocsMcpPack\Http\McpServerHttpController;
 use Padosoft\AskMyDocsMcpPack\Resilience\CircuitBreaker;
 use Padosoft\AskMyDocsMcpPack\Resilience\ResilienceMediator;
@@ -88,6 +91,19 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
                 __DIR__ . '/../database/migrations/' => database_path('migrations'),
             ], 'mcp-pack-migrations');
 
+            // v1.5.0 — opt-in identity-surface migrations (user
+            // preferences + API keys). Published under the same
+            // `mcp-pack-migrations` tag for ergonomics PLUS a
+            // dedicated tag so a host can publish ONLY the identity
+            // tables without re-publishing the audit table.
+            $this->publishes([
+                __DIR__ . '/../database/migrations-optional/' => database_path('migrations'),
+            ], 'mcp-pack-migrations');
+
+            $this->publishes([
+                __DIR__ . '/../database/migrations-optional/' => database_path('migrations'),
+            ], 'mcp-pack-identity-migrations');
+
             $this->commands([
                 McpPingCommand::class,
                 McpServeCommand::class,
@@ -120,6 +136,29 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
             Route::get('servers/{id}/tools', [ServersController::class, 'tools'])->name('mcp-pack.admin.servers.tools');
             Route::get('audit', AuditController::class)->name('mcp-pack.admin.audit');
             Route::get('circuit-breaker', CircuitBreakerController::class)->name('mcp-pack.admin.circuit-breaker');
+
+            // v1.5.0 — identity surface (W1.A). Each route is gated
+            // inside the controller by `mcp-pack.admin.features.*`
+            // so operators can hide a section per-tenant if needed.
+            if ((bool) config('mcp-pack.admin.features.me', true)) {
+                Route::get('me', [MeController::class, 'show'])->name('mcp-pack.admin.me.show');
+                Route::post('me/preferences', [MeController::class, 'updatePreferences'])->name('mcp-pack.admin.me.preferences');
+            }
+            if ((bool) config('mcp-pack.admin.features.tenants', true)) {
+                Route::get('tenants', [TenantsController::class, 'index'])->name('mcp-pack.admin.tenants.index');
+            }
+            if ((bool) config('mcp-pack.admin.features.api_keys', true)) {
+                Route::get('api-keys', [ApiKeysController::class, 'index'])->name('mcp-pack.admin.api-keys.index');
+                Route::post('api-keys', [ApiKeysController::class, 'store'])->name('mcp-pack.admin.api-keys.store');
+                Route::delete('api-keys/{id}', [ApiKeysController::class, 'destroy'])
+                    // R19 / `tok_01`-style ids include `_` so we
+                    // ALLOW underscore on the URL segment (it cannot
+                    // reach a SQL LIKE; the host owns the lookup).
+                    // The forbidden set is `%`, `*`, whitespace,
+                    // path separators.
+                    ->where('id', '[A-Za-z0-9._\-]+')
+                    ->name('mcp-pack.admin.api-keys.destroy');
+            }
         });
     }
 

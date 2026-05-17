@@ -1,0 +1,114 @@
+<?php
+
+namespace Padosoft\AskMyDocsMcpPack\Contracts\Concerns;
+
+use Padosoft\AskMyDocsMcpPack\Exceptions\HostFeatureNotImplementedException;
+use Padosoft\AskMyDocsMcpPack\Support\HostApiKey;
+use Padosoft\AskMyDocsMcpPack\Support\HostTenant;
+use Padosoft\AskMyDocsMcpPack\Support\HostUser;
+use Padosoft\AskMyDocsMcpPack\Support\HostUserPreferences;
+
+/**
+ * v1.5.0 — default implementation of the 9 identity / audit-replay /
+ * breaker-reset surface methods added to
+ * {@see \Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeContract}.
+ *
+ * Existing host bridges that pre-date v1.5 can adopt the new contract
+ * surface by declaring `use HasIdentitySurface;` — every method then
+ * throws {@see HostFeatureNotImplementedException}, which the admin
+ * controllers translate into HTTP 501 with a stable JSON envelope.
+ * Hosts override the methods they ACTUALLY want to expose; the
+ * rest stay 501.
+ *
+ * The trait deliberately does NOT touch `chat()` or
+ * `supportsToolCalling()` — those remain required of every bridge
+ * (they were the v1.0 contract surface, and a host that does not
+ * implement them simply cannot do tool calling).
+ *
+ * Backward-compat note: hosts shipping their own bridge BEFORE v1.5
+ * must add `use HasIdentitySurface;` (or implement the new methods
+ * themselves) when they bump the package. The shipped
+ * `NullMcpHostBridge` adopts the trait so the package's own service
+ * provider keeps booting on a fresh install.
+ */
+trait HasIdentitySurface
+{
+    public function currentUser(): ?HostUser
+    {
+        throw HostFeatureNotImplementedException::forFeature('currentUser');
+    }
+
+    /** @return array<int,HostTenant> */
+    public function listTenants(): array
+    {
+        throw HostFeatureNotImplementedException::forFeature('listTenants');
+    }
+
+    /**
+     * @param  int|string|null  $userId  null = all keys for the active
+     *                                   tenant; concrete id = scoped to
+     *                                   that user
+     * @return array<int,HostApiKey>
+     */
+    public function listApiKeys(int|string|null $userId = null): array
+    {
+        throw HostFeatureNotImplementedException::forFeature('listApiKeys');
+    }
+
+    /**
+     * @param  array<string,mixed>  $attrs  validated by CreateApiKeyRequest
+     */
+    public function createApiKey(array $attrs): HostApiKey
+    {
+        throw HostFeatureNotImplementedException::forFeature('createApiKey');
+    }
+
+    public function revokeApiKey(string $id): bool
+    {
+        throw HostFeatureNotImplementedException::forFeature('revokeApiKey');
+    }
+
+    /**
+     * @param  array<string,mixed>  $prefs  free-form bag — the host
+     *                                      decides what it persists
+     */
+    public function savePreferences(int|string $userId, array $prefs): HostUserPreferences
+    {
+        throw HostFeatureNotImplementedException::forFeature('savePreferences');
+    }
+
+    /**
+     * Returns the audit row + drilldown payload for a single
+     * `mcp_tool_call_audit` id, or `null` when not visible to the
+     * active tenant. Used by W1.C `AuditController::show()`.
+     *
+     * @return array<string,mixed>|null
+     */
+    public function auditFor(int|string $id): ?array
+    {
+        throw HostFeatureNotImplementedException::forFeature('auditFor');
+    }
+
+    /**
+     * Re-fires the audited tool call. Hosts MUST honour R21 atomic
+     * single-use semantics when implementing this — the package
+     * provides the replay-log table in W1.C; the bridge wires the
+     * actual `ToolInvoker` dispatch.
+     *
+     * @return array<string,mixed>
+     */
+    public function replayAudit(int|string $id, ?string $token = null): array
+    {
+        throw HostFeatureNotImplementedException::forFeature('replayAudit');
+    }
+
+    /**
+     * Resets the circuit breaker for `(serverId, toolName)`. Returns
+     * `true` when the breaker had state to reset, `false` when it was
+     * already closed.
+     */
+    public function resetBreaker(string $serverId, string $toolName, ?string $token = null): bool
+    {
+        throw HostFeatureNotImplementedException::forFeature('resetBreaker');
+    }
+}
