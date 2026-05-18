@@ -284,9 +284,9 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
             // `[^/]+` would 404 on every URI that has a path
             // component. `.+` is safe because the route prefix
             // anchors `/servers/{id}/resources/` so there is no
-            // ambiguity with sibling routes. The controller still
-            // calls `rawurldecode()` once defensively — a no-op when
-            // the router already decoded.
+            // ambiguity with sibling routes. The controller receives
+            // Symfony's already-decoded parameter and forwards it to
+            // the bridge unchanged (decode-exactly-once, R19).
             Route::get('servers/{id}/resources/{uri}', [ResourcesController::class, 'show'])
                 ->where('id', '[A-Za-z0-9._\-]+')
                 ->where('uri', '.+')
