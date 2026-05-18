@@ -123,4 +123,62 @@ final class FakeIdentityBridge implements McpHostBridgeContract, McpHostBridgeId
         $this->savedPreferences = [$userId, $prefs];
         return new HostUserPreferences(userId: $userId, values: $prefs);
     }
+
+    // ----- v1.5.0 W1.C — audit drilldown / replay / breaker reset -----
+
+    /** @var array<string,array<string,mixed>> keyed by `(id)` */
+    public array $auditRows = [];
+
+    /** @var array<string,?string> map of audit id → owning tenant id */
+    public array $auditTenants = [];
+
+    /** @var array<int,array{0:int|string, 1:?string}> calls to `auditFor` */
+    public array $auditForCalls = [];
+
+    /** @var array<int,array{0:int|string, 1:?string}> calls to `replayAudit` */
+    public array $replayAuditCalls = [];
+
+    public ?array $replayAuditResult = null;
+
+    /** @var array<int,array{0:string,1:string,2:?string}> calls to `resetBreaker` */
+    public array $resetBreakerCalls = [];
+
+    public ?bool $resetBreakerResult = null;
+
+    public function auditFor(int|string $id, ?string $tenantId = null): ?array
+    {
+        $this->auditForCalls[] = [$id, $tenantId];
+        if ($this->forceNotImplemented) {
+            throw HostFeatureNotImplementedException::forFeature('auditFor');
+        }
+        $key = (string) $id;
+        if (! isset($this->auditRows[$key])) {
+            return null;
+        }
+        // R30: tenant-scope the lookup at the bridge level (mirrors
+        // how a real host would `WHERE tenant_id = ?`).
+        $owningTenant = $this->auditTenants[$key] ?? null;
+        if ($tenantId !== null && $owningTenant !== null && $owningTenant !== $tenantId) {
+            return null;
+        }
+        return $this->auditRows[$key];
+    }
+
+    public function replayAudit(int|string $id, ?string $token = null): array
+    {
+        $this->replayAuditCalls[] = [$id, $token];
+        if ($this->forceNotImplemented || $this->replayAuditResult === null) {
+            throw HostFeatureNotImplementedException::forFeature('replayAudit');
+        }
+        return $this->replayAuditResult;
+    }
+
+    public function resetBreaker(string $serverId, string $toolName, ?string $token = null): bool
+    {
+        $this->resetBreakerCalls[] = [$serverId, $toolName, $token];
+        if ($this->forceNotImplemented || $this->resetBreakerResult === null) {
+            throw HostFeatureNotImplementedException::forFeature('resetBreaker');
+        }
+        return $this->resetBreakerResult;
+    }
 }

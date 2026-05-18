@@ -204,6 +204,35 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
             Route::get('audit', AuditController::class)->name('mcp-pack.admin.audit');
             Route::get('circuit-breaker', CircuitBreakerController::class)->name('mcp-pack.admin.circuit-breaker');
 
+            // v1.5.0 W1.C — tool invoke + audit drilldown/replay +
+            // breaker reset. Routes are registered UNCONDITIONALLY;
+            // per-feature gates live inside the controllers
+            // (`tool_invoke`, `audit_show`, `audit_replay`,
+            // `breaker_reset`) — same pattern as W1.A + W1.B.
+            //
+            // Regexes are tight per R19: alphanumerics + `.` `_` `-`
+            // on id/name segments; the breaker key additionally
+            // allows `:` because it carries the `<server_id>:<tool_name>`
+            // compound. URL-encoded `:` (`%3A`) decodes to `:` before
+            // the regex sees it, so the route still matches when a
+            // SPA encodes defensively.
+            Route::post('servers/{id}/tools/{name}/invoke', [ServersController::class, 'invoke'])
+                ->where('id', '[A-Za-z0-9._\-]+')
+                ->where('name', '[A-Za-z0-9._\-]+')
+                ->name('mcp-pack.admin.servers.tools.invoke');
+
+            Route::get('audit/{id}', [AuditController::class, 'show'])
+                ->where('id', '[A-Za-z0-9._\-]+')
+                ->name('mcp-pack.admin.audit.show');
+
+            Route::post('audit/{id}/replay', [AuditController::class, 'replay'])
+                ->where('id', '[A-Za-z0-9._\-]+')
+                ->name('mcp-pack.admin.audit.replay');
+
+            Route::post('circuit-breaker/{key}/reset', [CircuitBreakerController::class, 'reset'])
+                ->where('key', '[A-Za-z0-9.:_\-]+')
+                ->name('mcp-pack.admin.circuit-breaker.reset');
+
             // v1.5.0 — identity surface (W1.A). Routes are registered
             // UNCONDITIONALLY; the per-feature flag check happens
             // INSIDE the controller via `ResolvesAdminContext::featureGate()`,

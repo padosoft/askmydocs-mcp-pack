@@ -151,9 +151,20 @@ return [
         |   - `tools`          — `GET /tools` (v1.5.0 W1.B — flat
         |                        aggregator across every visible
         |                        server)
+        |   - `tool_invoke`    — `POST /servers/{id}/tools/{name}/invoke`
+        |                        (v1.5.0 W1.C — admin-side tool
+        |                        invocation; honours destructive-tool
+        |                        confirm guard)
+        |   - `audit_show`     — `GET /audit/{id}` (v1.5.0 W1.C — rich
+        |                        drilldown via host bridge)
+        |   - `audit_replay`   — `POST /audit/{id}/replay` (v1.5.0
+        |                        W1.C — two-call confirm-token
+        |                        protocol, R21 atomic)
+        |   - `breaker_reset`  — `POST /circuit-breaker/{key}/reset`
+        |                        (v1.5.0 W1.C — two-call confirm-token
+        |                        protocol, R21 atomic)
         |
-        | W1.C / W1.D add more keys (replay, breaker_reset, resources,
-        | prompts, events, openapi).
+        | W1.D adds more keys (resources, prompts, events, openapi).
         */
         'features' => [
             'me' => env('MCP_PACK_ADMIN_FEATURE_ME', true),
@@ -161,6 +172,10 @@ return [
             'api_keys' => env('MCP_PACK_ADMIN_FEATURE_API_KEYS', true),
             'servers_write' => env('MCP_PACK_ADMIN_FEATURE_SERVERS_WRITE', true),
             'tools' => env('MCP_PACK_ADMIN_FEATURE_TOOLS', true),
+            'tool_invoke' => env('MCP_PACK_ADMIN_FEATURE_TOOL_INVOKE', true),
+            'audit_show' => env('MCP_PACK_ADMIN_FEATURE_AUDIT_SHOW', true),
+            'audit_replay' => env('MCP_PACK_ADMIN_FEATURE_AUDIT_REPLAY', true),
+            'breaker_reset' => env('MCP_PACK_ADMIN_FEATURE_BREAKER_RESET', true),
         ],
     ],
 

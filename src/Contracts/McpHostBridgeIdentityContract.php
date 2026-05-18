@@ -104,27 +104,68 @@ interface McpHostBridgeIdentityContract extends McpHostBridgeContract
     public function savePreferences(int|string $userId, array $prefs): HostUserPreferences;
 
     /**
-     * (Signature reserved for W1.C) — single audit row + drilldown
-     * payload. Returns `null` when the row is not visible to the
-     * active tenant.
+     * v1.5.0 W1.C — single audit row + drilldown payload, scoped to
+     * the active tenant. Returns `null` when the row does not exist
+     * OR when it exists but belongs to a different tenant — the
+     * caller MUST NOT distinguish the two cases (404 in both, per
+     * R30: existence of cross-tenant rows must not leak).
+     *
+     * The controller passes the trusted tenant id (resolved from the
+     * `mcp_pack.tenant_id` middleware attribute) so the host can scope
+     * the SELECT without trusting wire input. `null` `$tenantId` means
+     * platform-global view — the host's auth middleware decided the
+     * actor is allowed to see every tenant's rows.
+     *
+     * Returned shape mirrors the SPA `AUDIT_DETAIL` fixture in
+     * `data.js`:
+     * `{id, ts, tenant, server, server_id, method, tool, status, dur,
+     *   actor, request, response, headers, timeline, meta}`.
      *
      * @return array<string,mixed>|null
      */
-    public function auditFor(int|string $id): ?array;
+    public function auditFor(int|string $id, ?string $tenantId = null): ?array;
 
     /**
-     * (Signature reserved for W1.C) — re-fire the audited tool call.
-     * Hosts MUST honour R21 single-use semantics on the `$token`
-     * argument inside a `DB::transaction` closure.
+     * v1.5.0 W1.C — re-fire the audited tool call.
+     *
+     * **R21 (security-invariants-atomic-or-absent)** — hosts MUST
+     * consume the `$token` argument inside a `DB::transaction` closure
+     * using `lockForUpdate()` on the confirm-token row, and the
+     * `used_at` write MUST happen in the SAME transaction. A two-step
+     * read-then-write that leaves the lock window before the write is
+     * a contract violation: two concurrent replays would both pass the
+     * "unused?" check and both fire, defeating the single-use
+     * semantics.
+     *
+     * The controller mints the token on the first POST (no token
+     * supplied) and returns it under a 202 envelope; the second POST
+     * carries the token back and that's the call that reaches the
+     * host. Tokens that are reused, forged, or expired MUST surface
+     * via the host throwing an exception the controller can map to
+     * 422 (the controller does not introspect the host's persistence
+     * — it owns mint + present, the host owns lock + consume + write).
+     *
+     * Returned shape: `{new_audit_id, result, latency_ms}` — the
+     * `new_audit_id` is the freshly-written `mcp_tool_call_audit` row
+     * so the SPA can deep-link to the replay.
      *
      * @return array<string,mixed>
      */
     public function replayAudit(int|string $id, ?string $token = null): array;
 
     /**
-     * (Signature reserved for W1.C) — reset the circuit breaker for
-     * `(serverId, toolName)` under an R21 single-use token guard.
-     * Returns `true` when the breaker had state to reset.
+     * v1.5.0 W1.C — reset the circuit breaker for `(serverId, toolName)`.
+     *
+     * **R21** — same atomicity contract as {@see replayAudit()}: the
+     * host MUST consume the `$token` inside a `DB::transaction` +
+     * `lockForUpdate()` closure on the confirm-token row, with the
+     * `used_at` write in the same transaction. The breaker mutation
+     * happens AFTER the token is consumed, but inside the same
+     * transaction so a transaction rollback also rolls back the
+     * breaker reset.
+     *
+     * Returns `true` when the breaker had non-closed state to reset,
+     * `false` when it was already closed (idempotent miss).
      */
     public function resetBreaker(string $serverId, string $toolName, ?string $token = null): bool;
 }

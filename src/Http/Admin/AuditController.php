@@ -5,7 +5,12 @@ namespace Padosoft\AskMyDocsMcpPack\Http\Admin;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeIdentityContract;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\MintsConfirmTokens;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\ResolvesAdminContext;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\ReplayAuditRequest;
 use Padosoft\AskMyDocsMcpPack\Models\McpToolCallAudit;
+use Padosoft\AskMyDocsMcpPack\Support\McpAdminConfirmToken;
 
 /**
  * v1.4.0 — paginated audit query surface over the
@@ -21,9 +26,29 @@ use Padosoft\AskMyDocsMcpPack\Models\McpToolCallAudit;
  * R30: the active tenant is resolved from the trusted middleware
  * attribute (`mcp_pack.tenant_id`) or the authenticated user, NEVER
  * from a client header. The query is scoped to that tenant.
+ *
+ * v1.5.0 W1.C adds two endpoints:
+ *  - `show($id)` — single-row drilldown via the host bridge's
+ *    `auditFor()` method (host owns the rich payload — request /
+ *    response / headers / timeline / meta).
+ *  - `replay($id)` — re-fires the audited tool call under an R21
+ *    single-use confirm-token guard (two-call protocol: mint then
+ *    consume).
  */
 final class AuditController
 {
+    use ResolvesAdminContext;
+    use MintsConfirmTokens;
+
+    public function __construct(
+        private readonly McpHostBridgeIdentityContract $identityBridge,
+    ) {}
+
+    public function index(Request $request): JsonResponse
+    {
+        return $this->__invoke($request);
+    }
+
     public function __invoke(Request $request): JsonResponse
     {
         $modelClass = $this->resolveAuditModelClass();
@@ -94,6 +119,105 @@ final class AuditController
         ]);
     }
 
+    /**
+     * v1.5.0 W1.C — `GET /audit/{id}`. Returns the rich drilldown
+     * payload (request / response / headers / timeline / meta) the
+     * SPA's `AUDIT_DETAIL` fixture in `data.js` describes. The host
+     * bridge owns the payload because the package only persists
+     * SHA-256 hashes of the input/output — full raw payloads live in
+     * the host's audit subclass (per the per-host augmentation
+     * pattern documented in {@see McpToolCallAudit}).
+     */
+    public function show(Request $request, string $id): JsonResponse
+    {
+        $blocked = $this->featureGate('audit_show');
+        if ($blocked !== null) {
+            return $blocked;
+        }
+
+        $tenantId = $this->resolveTenantId($request);
+
+        return $this->withHostBridge(function () use ($id, $tenantId): JsonResponse {
+            $row = $this->identityBridge->auditFor($id, $tenantId);
+            if ($row === null) {
+                return $this->notFound("Audit row [{$id}] not found.");
+            }
+            return new JsonResponse(['data' => $row]);
+        });
+    }
+
+    /**
+     * v1.5.0 W1.C — `POST /audit/{id}/replay`. Two-call protocol:
+     *  1. First POST (no `confirm_token`) — mint a token + 202.
+     *  2. Second POST (with the token) — forward to the host bridge
+     *     which atomically consumes + replays inside its own
+     *     `DB::transaction` (R21 — see contract docblock on
+     *     {@see McpHostBridgeIdentityContract::replayAudit()}).
+     *
+     * Cross-tenant safety: BEFORE minting we check that the audit row
+     * is visible to the active tenant via `auditFor()`. A foreign-tenant
+     * id surfaces as 404 at mint time, so an attacker can't even
+     * harvest a token for a row they shouldn't see.
+     */
+    public function replay(ReplayAuditRequest $request, string $id): JsonResponse
+    {
+        $blocked = $this->featureGate('audit_replay');
+        if ($blocked !== null) {
+            return $blocked;
+        }
+
+        $tenantId = $this->resolveTenantId($request);
+        $confirmToken = $request->confirmToken();
+
+        if ($confirmToken === null) {
+            // Mint path — verify visibility first so cross-tenant ids
+            // don't even leak a usable token.
+            return $this->withHostBridge(function () use ($id, $tenantId): JsonResponse {
+                $row = $this->identityBridge->auditFor($id, $tenantId);
+                if ($row === null) {
+                    return $this->notFound("Audit row [{$id}] not found.");
+                }
+                return $this->mintConfirmToken(
+                    scope: McpAdminConfirmToken::SCOPE_AUDIT_REPLAY,
+                    targetId: (string) $id,
+                    tenantId: $tenantId,
+                );
+            });
+        }
+
+        // Consume path — validate the package's mint marker, then
+        // hand off to the host bridge which performs the atomic
+        // `lockForUpdate` + `used_at` write + replay in one transaction.
+        $invalid = $this->validateConfirmToken(
+            scope: McpAdminConfirmToken::SCOPE_AUDIT_REPLAY,
+            targetId: (string) $id,
+            tenantId: $tenantId,
+            token: $confirmToken,
+        );
+        if ($invalid !== null) {
+            return $invalid;
+        }
+
+        return $this->withHostBridge(function () use ($id, $tenantId, $confirmToken): JsonResponse {
+            // R30 belt-and-braces: re-check visibility on consume.
+            $row = $this->identityBridge->auditFor($id, $tenantId);
+            if ($row === null) {
+                return $this->notFound("Audit row [{$id}] not found.");
+            }
+            $result = $this->identityBridge->replayAudit($id, $confirmToken);
+            // R21: best-effort forget on success — the host's
+            // `used_at` flag is the source of truth, this is the
+            // package's defence-in-depth so the cache marker can't
+            // be re-presented.
+            $this->forgetConfirmToken(
+                scope: McpAdminConfirmToken::SCOPE_AUDIT_REPLAY,
+                targetId: (string) $id,
+                token: $confirmToken,
+            );
+            return new JsonResponse(['data' => $result]);
+        });
+    }
+
     /** @return class-string<\Illuminate\Database\Eloquent\Model>|null */
     private function resolveAuditModelClass(): ?string
     {
@@ -114,22 +238,15 @@ final class AuditController
         return $class;
     }
 
-    private function resolveTenantId(Request $request): ?string
-    {
-        $trustedAttribute = $request->attributes->get('mcp_pack.tenant_id');
-        if (is_string($trustedAttribute) && $trustedAttribute !== '') {
-            return $trustedAttribute;
-        }
-        $user = $request->user();
-        if ($user === null) {
-            return null;
-        }
-        $tenant = data_get($user, 'tenant_id');
-        return is_string($tenant) && $tenant !== '' ? $tenant : null;
-    }
-
     private function clampInt(int $value, int $min, int $max): int
     {
         return max($min, min($max, $value));
+    }
+
+    private function notFound(string $message): JsonResponse
+    {
+        return new JsonResponse([
+            'error' => ['code' => 'not_found', 'message' => $message],
+        ], 404);
     }
 }

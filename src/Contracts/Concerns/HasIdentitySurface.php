@@ -79,12 +79,14 @@ trait HasIdentitySurface
 
     /**
      * Returns the audit row + drilldown payload for a single
-     * `mcp_tool_call_audit` id, or `null` when not visible to the
-     * active tenant. Used by W1.C `AuditController::show()`.
+     * `mcp_tool_call_audit` id scoped to the active tenant, or `null`
+     * when not visible. Used by W1.C `AuditController::show()`. The
+     * controller passes the trusted tenant id resolved from the
+     * `mcp_pack.tenant_id` middleware attribute.
      *
      * @return array<string,mixed>|null
      */
-    public function auditFor(int|string $id): ?array
+    public function auditFor(int|string $id, ?string $tenantId = null): ?array
     {
         throw HostFeatureNotImplementedException::forFeature('auditFor');
     }
