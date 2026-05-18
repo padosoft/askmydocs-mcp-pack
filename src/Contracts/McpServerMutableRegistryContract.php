@@ -42,6 +42,29 @@ use Padosoft\AskMyDocsMcpPack\Support\McpServerPage;
 interface McpServerMutableRegistryContract extends McpServerRegistryContract
 {
     /**
+     * Tenant-scoped lookup that ALSO returns disabled rows.
+     *
+     * Why a dedicated method (added in iter-1 of W1.B):
+     *
+     *  - `forTenant()` may filter by enabled status (the in-memory
+     *    registry does);
+     *  - `find()` is "global" — it walks the registry in iteration
+     *    order and returns the first match. If two tenants legitimately
+     *    share `srv-a`, `find()` can return the other tenant's row
+     *    first, which a controller would incorrectly 403 as
+     *    cross-tenant;
+     *  - admin write paths (`PATCH /servers/{id}` + `DELETE`) MUST be
+     *    able to find rows by id within the active tenant AND include
+     *    disabled rows (operators do PATCH disabled-true → false).
+     *
+     * Returns `null` when no row matches BOTH the active tenant and
+     * the id. Default impl in {@see Concerns\HasMutableRegistry} walks
+     * `forTenant()` + falls back to `find()` so existing hosts get the
+     * narrowing without subclassing.
+     */
+    public function findForActiveTenant(?string $tenantId, string $id, bool $includeDisabled = true): ?McpServerContract;
+
+    /**
      * Paginated registry view scoped to the active tenant.
      *
      * Filters keys (all optional, all string-based):
@@ -86,8 +109,11 @@ interface McpServerMutableRegistryContract extends McpServerRegistryContract
      * responsibility; the controller also enforces a tenant check
      * BEFORE calling this method (defence in depth).
      *
-     * Returns the updated row. The host SHOULD throw if `$id` does
-     * not exist — the controller surfaces that as HTTP 404.
+     * Returns the updated row. The host MUST throw
+     * {@see \Padosoft\AskMyDocsMcpPack\Exceptions\McpServerNotFoundException}
+     * when `$id` does not exist — the controller catches that
+     * exception and surfaces HTTP 404. Any other exception bubbles up
+     * to the framework's handler (and answers 500).
      *
      * @param array<string,mixed> $attributes
      */

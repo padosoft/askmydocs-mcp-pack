@@ -4,6 +4,7 @@ namespace Padosoft\AskMyDocsMcpPack\Contracts\Concerns;
 
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerContract;
 use Padosoft\AskMyDocsMcpPack\Exceptions\HostFeatureNotImplementedException;
+use Padosoft\AskMyDocsMcpPack\Exceptions\McpServerNotFoundException;
 use Padosoft\AskMyDocsMcpPack\Support\McpServerPage;
 
 /**
@@ -30,6 +31,45 @@ use Padosoft\AskMyDocsMcpPack\Support\McpServerPage;
  */
 trait HasMutableRegistry
 {
+    /**
+     * Default tenant-scoped lookup — walks `forTenant()` first
+     * (correct under id reuse across tenants) and falls back to the
+     * global `find()` ONLY when no tenant is active (CLI / cron paths
+     * that operate on the platform-wide catalog).
+     *
+     * When `$includeDisabled` is `true` AND `forTenant()` hides
+     * disabled servers, the disabled row is found via `find()` and
+     * its tenant id is checked manually before returning — preserving
+     * R30 even on registries that filter `forTenant()` by enabled
+     * state.
+     */
+    public function findForActiveTenant(?string $tenantId, string $id, bool $includeDisabled = true): ?McpServerContract
+    {
+        if ($tenantId !== null) {
+            foreach ($this->forTenant($tenantId) as $server) {
+                if ($server->id() === $id) {
+                    return $server;
+                }
+            }
+        }
+
+        if (! $includeDisabled) {
+            return null;
+        }
+
+        $candidate = $this->find($id);
+        if ($candidate === null) {
+            return null;
+        }
+        if ($tenantId !== null && $candidate->tenantId() !== null && $candidate->tenantId() !== $tenantId) {
+            // Found by id, but it belongs to another tenant. Do not
+            // surface it to the caller — R30 means "the row does not
+            // exist FROM THIS TENANT'S PERSPECTIVE".
+            return null;
+        }
+        return $candidate;
+    }
+
     /**
      * @param array<string,mixed> $filters
      */

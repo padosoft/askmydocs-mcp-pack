@@ -155,6 +155,21 @@ final class ToolsController
         $desc = (string) ($tool['description'] ?? $tool['desc'] ?? '');
         $destructive = $this->detectDestructive($tool, $name);
 
+        // Iter-1 fix: real MCP `tools/list` payloads expose the
+        // argument schema under `inputSchema` (camelCase, per the
+        // MCP wire spec); RemoteMcpTool additionally accepts
+        // `input_schema` (snake) and `parameters`. The flattener
+        // tries the official MCP key first, then the snake variant,
+        // then `schema` (data.js / prototype fixtures), and finally
+        // `parameters` (OpenAI-style function-call shape) — only
+        // arrays are surfaced so the JSON response never carries
+        // garbage scalars.
+        $schema = $tool['inputSchema']
+            ?? $tool['input_schema']
+            ?? $tool['schema']
+            ?? $tool['parameters']
+            ?? null;
+
         return [
             'server_id' => $server->id(),
             'server_name' => $server->name(),
@@ -163,7 +178,7 @@ final class ToolsController
             'destructive' => $destructive,
             'calls_24h' => (int) ($tool['calls_24h'] ?? 0),
             'p50' => (int) ($tool['p50'] ?? 0),
-            'schema' => is_array($tool['schema'] ?? null) ? $tool['schema'] : new \stdClass(),
+            'schema' => is_array($schema) ? $schema : new \stdClass(),
         ];
     }
 

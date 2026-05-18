@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\DB;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerMutableRegistryContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerRegistryContract;
+use Padosoft\AskMyDocsMcpPack\Exceptions\McpServerNotFoundException;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpTransportException;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\ResolvesAdminContext;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\StoreServerRequest;
@@ -200,7 +201,11 @@ final class ServersController
 
             $server = $this->mutableRegistry->create($attrs);
 
-            $location = url('/api/admin/mcp-pack/servers/' . rawurlencode($server->id()));
+            // Iter-1 fix: Location header builds via the named route
+            // so a host that configured `mcp-pack.admin.prefix` to a
+            // non-default value gets a correct URL. `route()` returns
+            // absolute by default, matching the Laravel convention.
+            $location = route('mcp-pack.admin.servers.show', ['id' => $server->id()]);
 
             return (new JsonResponse(
                 ['data' => $this->resourceShape($server)],
@@ -222,24 +227,36 @@ final class ServersController
             return $blocked;
         }
 
-        $existing = $this->registry->find($id);
+        // Iter-1 fix: use the new tenant-scoped lookup that
+        //  (a) walks `forTenant()` first so id reuse across tenants
+        //      cannot return another tenant's row,
+        //  (b) includes disabled servers so operators can flip
+        //      `enabled=false` → `true` without hitting a stale 404.
+        $tenantId = $this->resolveTenantId($request);
+        $existing = $this->mutableRegistry->findForActiveTenant($tenantId, $id, includeDisabled: true);
         if ($existing === null) {
             return $this->notFound("Server [{$id}] not found.");
         }
 
-        // R30: reject cross-tenant update attempts BEFORE calling the
-        // host bridge. The host's own implementation MAY also enforce
-        // this, but the controller layer is the single source of
-        // truth for tenant boundary semantics.
-        $tenantId = $this->resolveTenantId($request);
+        // R30 belt-and-braces: a host registry that ignored `tenantId`
+        // in `findForActiveTenant` would still surface a foreign row.
+        // The check below catches it before delegating to the host's
+        // mutable registry.
         if ($existing->tenantId() !== null && $existing->tenantId() !== $tenantId) {
             return $this->forbidden(
                 "Server [{$id}] belongs to a different tenant. Cross-tenant updates are forbidden.",
             );
         }
 
-        return $this->withHostBridge(function () use ($request, $id): JsonResponse {
-            $server = $this->mutableRegistry->update($id, $request->payload());
+        return $this->withHostBridge(function () use ($request, $id, $tenantId): JsonResponse {
+            try {
+                $server = $this->mutableRegistry->update($id, $request->payload());
+            } catch (McpServerNotFoundException $e) {
+                // Race between the pre-check and the mutable write
+                // (concurrent delete) — surface as the documented 404
+                // envelope, never a 500.
+                return $this->notFound($e->getMessage());
+            }
             return new JsonResponse(['data' => $this->resourceShape($server)]);
         });
     }
@@ -258,12 +275,14 @@ final class ServersController
             return $blocked;
         }
 
-        $existing = $this->registry->find($id);
+        // Iter-1 fix: tenant-scoped lookup (same as `update`) so id
+        // reuse + disabled rows behave correctly.
+        $tenantId = $this->resolveTenantId($request);
+        $existing = $this->mutableRegistry->findForActiveTenant($tenantId, $id, includeDisabled: true);
         if ($existing === null) {
             return $this->notFound("Server [{$id}] not found.");
         }
 
-        $tenantId = $this->resolveTenantId($request);
         if ($existing->tenantId() !== null && $existing->tenantId() !== $tenantId) {
             return $this->forbidden(
                 "Server [{$id}] belongs to a different tenant. Cross-tenant deletes are forbidden.",
@@ -271,7 +290,11 @@ final class ServersController
         }
 
         return $this->withHostBridge(function () use ($id): JsonResponse {
-            $deleted = DB::transaction(fn(): bool => $this->mutableRegistry->delete($id));
+            try {
+                $deleted = DB::transaction(fn(): bool => $this->mutableRegistry->delete($id));
+            } catch (McpServerNotFoundException $e) {
+                return $this->notFound($e->getMessage());
+            }
             if (! $deleted) {
                 return $this->notFound("Server [{$id}] not found.");
             }

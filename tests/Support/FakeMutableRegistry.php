@@ -5,6 +5,7 @@ namespace Padosoft\AskMyDocsMcpPack\Tests\Support;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerMutableRegistryContract;
 use Padosoft\AskMyDocsMcpPack\Exceptions\HostFeatureNotImplementedException;
+use Padosoft\AskMyDocsMcpPack\Exceptions\McpServerNotFoundException;
 use Padosoft\AskMyDocsMcpPack\Support\McpServerPage;
 
 /**
@@ -40,6 +41,12 @@ final class FakeMutableRegistry implements McpServerMutableRegistryContract
      *  `null` to throw the 501 default. */
     public ?bool $deleteResult = null;
 
+    /** When `true`, `update()` throws `McpServerNotFoundException`
+     *  instead of returning `$updateResult` — simulates a concurrent
+     *  delete between the controller pre-check and the actual
+     *  mutation. The controller catches it and answers 404. */
+    public bool $updateThrowsServerNotFound = false;
+
     /** @var array<int,array{string, array<string,mixed>}> */
     public array $createCalls = [];
 
@@ -71,6 +78,29 @@ final class FakeMutableRegistry implements McpServerMutableRegistryContract
         return null;
     }
 
+    /**
+     * Iter-1 (W1.B) — tenant-scoped lookup that includes disabled
+     * rows when asked. Tests rely on this returning the disabled
+     * server so PATCH/DELETE controller flows can exercise the
+     * "operator flips disabled → enabled" path.
+     */
+    public function findForActiveTenant(?string $tenantId, string $id, bool $includeDisabled = true): ?McpServerContract
+    {
+        foreach ($this->servers as $s) {
+            if ($s->id() !== $id) {
+                continue;
+            }
+            if (! $includeDisabled && ! $s->isEnabled()) {
+                continue;
+            }
+            if ($tenantId !== null && $s->tenantId() !== null && $s->tenantId() !== $tenantId) {
+                continue;
+            }
+            return $s;
+        }
+        return null;
+    }
+
     public function paginate(
         ?string $tenantId,
         array $filters = [],
@@ -96,6 +126,9 @@ final class FakeMutableRegistry implements McpServerMutableRegistryContract
 
     public function update(string $id, array $attributes): McpServerContract
     {
+        if ($this->updateThrowsServerNotFound) {
+            throw McpServerNotFoundException::forId($id);
+        }
         if ($this->forceNotImplemented || $this->updateResult === null) {
             throw HostFeatureNotImplementedException::forFeature('update');
         }

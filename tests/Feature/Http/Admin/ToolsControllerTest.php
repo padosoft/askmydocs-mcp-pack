@@ -235,6 +235,61 @@ class ToolsControllerTest extends TestCase
         $this->assertFalse($byName['list_channels']['destructive']);
         $this->assertTrue($byName['delete_channel']['destructive']);
     }
+
+    public function test_index_surfaces_inputSchema_from_real_mcp_payload(): void
+    {
+        // Iter-1 (W1.B): real MCP `tools/list` payloads expose the
+        // argument schema as `inputSchema` (camelCase, per the wire
+        // spec). The previous flattener only read `schema` and
+        // returned an empty object for real servers. Pin the
+        // fallback order: inputSchema > input_schema > schema >
+        // parameters.
+        $this->bootRegistry();
+        InjectTenantMiddleware::$tenantId = 'acme';
+        $this->bootMultiServerHandshake([
+            'srv-a' => [
+                [
+                    'name' => 'search',
+                    'inputSchema' => [
+                        'type' => 'object',
+                        'properties' => ['q' => ['type' => 'string']],
+                    ],
+                ],
+                [
+                    'name' => 'summarise',
+                    'input_schema' => [
+                        'type' => 'object',
+                        'properties' => ['text' => ['type' => 'string']],
+                    ],
+                ],
+                [
+                    'name' => 'embed',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => ['text' => ['type' => 'string']],
+                    ],
+                ],
+            ],
+            'srv-b' => [],
+        ]);
+
+        $response = $this->getJson('/api/admin/mcp-pack/tools');
+        $response->assertOk();
+        $rows = $response->json('data');
+        $byName = array_column($rows, null, 'name');
+        $this->assertSame(
+            ['type' => 'object', 'properties' => ['q' => ['type' => 'string']]],
+            $byName['search']['schema'],
+        );
+        $this->assertSame(
+            ['type' => 'object', 'properties' => ['text' => ['type' => 'string']]],
+            $byName['summarise']['schema'],
+        );
+        $this->assertSame(
+            ['type' => 'object', 'properties' => ['text' => ['type' => 'string']]],
+            $byName['embed']['schema'],
+        );
+    }
 }
 
 /**

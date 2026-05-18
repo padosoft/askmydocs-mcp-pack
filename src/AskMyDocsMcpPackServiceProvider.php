@@ -17,6 +17,7 @@ use Padosoft\AskMyDocsMcpPack\Contracts\McpServerRegistryContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpToolAuthorizerContract;
 use Padosoft\AskMyDocsMcpPack\Defaults\InMemoryMcpServerRegistry;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpHostBridge;
+use Padosoft\AskMyDocsMcpPack\Defaults\ReadOnlyMutableRegistryAdapter;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpServerExposure;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpToolAuthorizer;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\ApiKeysController;
@@ -76,7 +77,15 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
             if ($registry instanceof McpServerMutableRegistryContract) {
                 return $registry;
             }
-            return $app->make(InMemoryMcpServerRegistry::class);
+            // Iter-1 fix: the previous fallback created a FRESH empty
+            // in-memory registry, silently dropping the host's actual
+            // server catalog on paginated reads. Wrap the host's read
+            // registry in a read-only adapter that delegates
+            // `forTenant()` / `find()` to it, exposes a working
+            // `paginate()` over the same data, and throws 501 on
+            // `create/update/delete`. The SPA's read table works for
+            // free; writes get the documented HTTP 501 envelope.
+            return new ReadOnlyMutableRegistryAdapter($registry);
         });
 
         $this->app->singleton(JsonRpcRequestHandler::class, function ($app) {

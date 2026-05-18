@@ -394,16 +394,22 @@ class ServersControllerTest extends TestCase
         $this->assertSame('not_found', $response->json('error.code'));
     }
 
-    public function test_update_403_cross_tenant(): void
+    public function test_update_404_when_target_belongs_to_other_tenant(): void
     {
+        // Iter-1 (W1.B) — under the new tenant-scoped lookup, a row
+        // owned by another tenant is INVISIBLE from this tenant's
+        // perspective. The controller answers 404 ("server does not
+        // exist for me"), not 403 ("server exists, you can't touch
+        // it") — 404 does NOT leak the existence of cross-tenant
+        // rows. R30 holds either way; 404 is strictly safer.
         $this->bindMutable();
         InjectTenantMiddleware::$tenantId = 'acme';
-        // srv-b lives under tenant 'globex' — must refuse from 'acme'.
+        // srv-b lives under tenant 'globex' — invisible from 'acme'.
         $response = $this->patchJson('/api/admin/mcp-pack/servers/srv-b', [
             'name' => 'X',
         ]);
-        $response->assertStatus(403);
-        $this->assertSame('tenant_forbidden', $response->json('error.code'));
+        $response->assertStatus(404);
+        $this->assertSame('not_found', $response->json('error.code'));
     }
 
     public function test_update_422_when_tenant_id_provided_on_wire(): void
@@ -463,14 +469,17 @@ class ServersControllerTest extends TestCase
         $response->assertStatus(404);
     }
 
-    public function test_destroy_403_cross_tenant(): void
+    public function test_destroy_404_when_target_belongs_to_other_tenant(): void
     {
+        // Iter-1 (W1.B) — same rationale as update: cross-tenant rows
+        // are invisible (404) rather than forbidden (403). Tenant
+        // existence does not leak.
         $this->bindMutable();
         InjectTenantMiddleware::$tenantId = 'acme';
 
         $response = $this->deleteJson('/api/admin/mcp-pack/servers/srv-b');
-        $response->assertStatus(403);
-        $this->assertSame('tenant_forbidden', $response->json('error.code'));
+        $response->assertStatus(404);
+        $this->assertSame('not_found', $response->json('error.code'));
     }
 
     public function test_destroy_403_when_feature_disabled(): void
@@ -501,6 +510,93 @@ class ServersControllerTest extends TestCase
 
         $routes = $this->app['router']->getRoutes();
         $this->assertTrue($routes->hasNamedRoute('mcp-pack.admin.tools.index'));
+    }
+
+    // ----- v1.5.0 W1.B iter-1 — Copilot finding pins ---------------------
+
+    public function test_update_works_on_disabled_servers(): void
+    {
+        // Iter-1 (W1.B): disabled servers appear in `paginate()`
+        // (admin table) so the SPA can flip them back enabled — but
+        // the previous `find($id)` pre-check hid them, 404'ing valid
+        // re-enable PATCHes. `findForActiveTenant(..., includeDisabled: true)`
+        // fixes it. Pin the contract.
+        $mutable = $this->bindMutable();
+        InjectTenantMiddleware::$tenantId = 'acme';
+        // Replace the seeded `srv-a` with a disabled variant.
+        $mutable->servers = [
+            new FakeMcpServer(id: 'srv-a', name: 'Alpha', tenantId: 'acme', enabled: false),
+        ];
+        $mutable->updateResult = new FakeMcpServer(id: 'srv-a', name: 'Alpha', tenantId: 'acme', enabled: true);
+
+        $response = $this->patchJson('/api/admin/mcp-pack/servers/srv-a', [
+            'enabled' => true,
+        ]);
+        $response->assertOk();
+        $this->assertSame([['srv-a', ['enabled' => true]]], $mutable->updateCalls);
+    }
+
+    public function test_destroy_works_on_disabled_servers(): void
+    {
+        $mutable = $this->bindMutable();
+        InjectTenantMiddleware::$tenantId = 'acme';
+        $mutable->servers = [
+            new FakeMcpServer(id: 'srv-a', name: 'Alpha', tenantId: 'acme', enabled: false),
+        ];
+        $mutable->deleteResult = true;
+
+        $response = $this->deleteJson('/api/admin/mcp-pack/servers/srv-a');
+        $response->assertStatus(204);
+        $this->assertSame(['srv-a'], $mutable->deleteCalls);
+    }
+
+    public function test_update_404_when_host_throws_server_not_found_race(): void
+    {
+        // Iter-1 (W1.B): the contract documents that the mutable
+        // registry's `update()` throws `McpServerNotFoundException`
+        // when the row is missing (e.g. a concurrent delete fired
+        // between the controller pre-check and the actual mutation).
+        // The controller catches that exception and answers 404
+        // instead of bubbling to a generic 500.
+        $mutable = $this->bindMutable();
+        InjectTenantMiddleware::$tenantId = 'acme';
+        $mutable->updateResult = null; // will throw
+        $mutable->updateThrowsServerNotFound = true;
+
+        $response = $this->patchJson('/api/admin/mcp-pack/servers/srv-a', [
+            'name' => 'X',
+        ]);
+        $response->assertStatus(404);
+        $this->assertSame('not_found', $response->json('error.code'));
+    }
+
+    public function test_store_location_header_resolves_via_named_route(): void
+    {
+        // Iter-1 (W1.B): the previous Location header used a
+        // hard-coded `/api/admin/mcp-pack/...` prefix; the fix builds
+        // it via `route('mcp-pack.admin.servers.show', $id)` so a
+        // host that customised `mcp-pack.admin.prefix` gets a
+        // correct URL.
+        //
+        // We can't easily refresh the app under Testbench (the
+        // migration teardown trips up). Instead, we assert the
+        // Location header EXACTLY MATCHES the named-route URL the
+        // package itself resolves — if the controller regressed to
+        // `url('/api/admin/mcp-pack/servers/...')` and the prefix
+        // was customised, the expected and actual URLs would diverge.
+        $mutable = $this->bindMutable();
+        InjectTenantMiddleware::$tenantId = 'acme';
+        $mutable->createResult = new FakeMcpServer(id: 'srv-named', name: 'X', tenantId: 'acme');
+
+        $response = $this->postJson('/api/admin/mcp-pack/servers', [
+            'name' => 'X',
+            'transport' => 'http',
+            'url' => 'https://example.test/mcp',
+        ]);
+        $response->assertStatus(201);
+
+        $expected = route('mcp-pack.admin.servers.show', ['id' => 'srv-named']);
+        $this->assertSame($expected, $response->headers->get('Location'));
     }
 }
 
