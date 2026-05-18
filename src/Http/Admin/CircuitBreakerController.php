@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeIdentityContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerRegistryContract;
+use Padosoft\AskMyDocsMcpPack\Exceptions\InvalidConfirmTokenException;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\MintsConfirmTokens;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\ResolvesAdminContext;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\ResetBreakerRequest;
@@ -147,7 +148,7 @@ final class CircuitBreakerController
             );
         }
 
-        $invalid = $this->validateConfirmToken(
+        $invalid = $this->consumeConfirmToken(
             scope: McpAdminConfirmToken::SCOPE_BREAKER_RESET,
             targetId: $targetId,
             tenantId: $tenantId,
@@ -157,13 +158,12 @@ final class CircuitBreakerController
             return $invalid;
         }
 
-        return $this->withHostBridge(function () use ($serverId, $toolName, $confirmToken, $targetId): JsonResponse {
-            $changed = $this->identityBridge->resetBreaker($serverId, $toolName, $confirmToken);
-            $this->forgetConfirmToken(
-                scope: McpAdminConfirmToken::SCOPE_BREAKER_RESET,
-                targetId: $targetId,
-                token: $confirmToken,
-            );
+        return $this->withHostBridge(function () use ($serverId, $toolName, $confirmToken): JsonResponse {
+            try {
+                $changed = $this->identityBridge->resetBreaker($serverId, $toolName, $confirmToken);
+            } catch (InvalidConfirmTokenException $e) {
+                return $this->confirmTokenInvalid($e->getMessage());
+            }
             return new JsonResponse([
                 'data' => [
                     'server_id' => $serverId,

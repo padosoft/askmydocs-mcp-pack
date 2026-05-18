@@ -30,10 +30,11 @@ class ServersControllerInvokeTest extends TestCase
         InjectTenantMiddleware::$tenantId = null;
     }
 
-    private function bootRegistry(): InMemoryMcpServerRegistry
+    /** @param array<int,string> $allowedTools */
+    private function bootRegistry(array $allowedTools = []): InMemoryMcpServerRegistry
     {
         $registry = new InMemoryMcpServerRegistry();
-        $registry->add(new FakeMcpServer(id: 'srv-a', name: 'Alpha', tenantId: 'acme'));
+        $registry->add(new FakeMcpServer(id: 'srv-a', name: 'Alpha', tenantId: 'acme', allowedTools: $allowedTools));
         $registry->add(new FakeMcpServer(id: 'srv-b', name: 'Beta', tenantId: 'globex'));
         $this->app->instance(McpServerRegistryContract::class, $registry);
         return $registry;
@@ -91,8 +92,11 @@ class ServersControllerInvokeTest extends TestCase
         $response->assertStatus(404);
     }
 
-    public function test_invoke_422_confirmation_required_on_destructive_tool(): void
+    public function test_invoke_destructive_first_post_mints_confirm_token(): void
     {
+        // Iter-1 (W1.C): destructive tools use the R21 single-use
+        // confirm-token two-call protocol (NOT a reusable boolean).
+        // The first POST without a token returns 202 + token.
         $this->bootRegistry();
         $this->bootHandshake([['name' => 'kb.delete', 'destructive' => true]]);
         $this->bootInvoker();
@@ -101,11 +105,13 @@ class ServersControllerInvokeTest extends TestCase
         $response = $this->postJson('/api/admin/mcp-pack/servers/srv-a/tools/kb.delete/invoke', [
             'arguments' => ['id' => 1],
         ]);
-        $response->assertStatus(422);
-        $this->assertSame('confirmation_required', $response->json('error.code'));
+        $response->assertStatus(202);
+        $this->assertSame('tool_invoke', $response->json('data.scope'));
+        $this->assertSame('srv-a:kb.delete', $response->json('data.target_id'));
+        $this->assertMatchesRegularExpression('/^tok_[a-f0-9]{32}$/', $response->json('data.confirm_token'));
     }
 
-    public function test_invoke_destructive_tool_proceeds_with_confirm_true(): void
+    public function test_invoke_destructive_consumes_token_then_invokes(): void
     {
         $this->bootRegistry();
         $this->bootHandshake([['name' => 'kb.delete', 'destructive' => true]]);
@@ -113,12 +119,82 @@ class ServersControllerInvokeTest extends TestCase
         $invoker->result = ['deleted' => true];
         InjectTenantMiddleware::$tenantId = 'acme';
 
+        // Mint the token.
+        $mintResponse = $this->postJson('/api/admin/mcp-pack/servers/srv-a/tools/kb.delete/invoke', [
+            'arguments' => ['id' => 1],
+        ]);
+        $mintResponse->assertStatus(202);
+        $token = $mintResponse->json('data.confirm_token');
+
+        // Consume + invoke.
         $response = $this->postJson('/api/admin/mcp-pack/servers/srv-a/tools/kb.delete/invoke', [
             'arguments' => ['id' => 1],
-            'confirm' => true,
+            'confirm_token' => $token,
         ]);
         $response->assertOk();
         $this->assertSame(['deleted' => true], $response->json('data.result'));
+    }
+
+    public function test_invoke_destructive_rejects_reused_token(): void
+    {
+        $this->bootRegistry();
+        $this->bootHandshake([['name' => 'kb.delete', 'destructive' => true]]);
+        $invoker = $this->bootInvoker();
+        $invoker->result = ['deleted' => true];
+        InjectTenantMiddleware::$tenantId = 'acme';
+
+        $mintResponse = $this->postJson('/api/admin/mcp-pack/servers/srv-a/tools/kb.delete/invoke', [
+            'arguments' => ['id' => 1],
+        ]);
+        $token = $mintResponse->json('data.confirm_token');
+
+        // First consume — success.
+        $this->postJson('/api/admin/mcp-pack/servers/srv-a/tools/kb.delete/invoke', [
+            'arguments' => ['id' => 1],
+            'confirm_token' => $token,
+        ])->assertOk();
+
+        // Second consume — rejected. R21 single-use semantics.
+        $second = $this->postJson('/api/admin/mcp-pack/servers/srv-a/tools/kb.delete/invoke', [
+            'arguments' => ['id' => 1],
+            'confirm_token' => $token,
+        ]);
+        $second->assertStatus(422);
+        $this->assertSame('confirmation_invalid', $second->json('error.code'));
+    }
+
+    public function test_invoke_destructive_rejects_forged_token(): void
+    {
+        $this->bootRegistry();
+        $this->bootHandshake([['name' => 'kb.delete', 'destructive' => true]]);
+        $this->bootInvoker();
+        InjectTenantMiddleware::$tenantId = 'acme';
+
+        $response = $this->postJson('/api/admin/mcp-pack/servers/srv-a/tools/kb.delete/invoke', [
+            'arguments' => ['id' => 1],
+            'confirm_token' => 'tok_' . str_repeat('a', 32),
+        ]);
+        $response->assertStatus(422);
+        $this->assertSame('confirmation_invalid', $response->json('error.code'));
+    }
+
+    public function test_invoke_404_when_tool_not_in_server_allowlist(): void
+    {
+        // Iter-1 (W1.C): when a server declares a non-empty
+        // `allowedTools()` list, the invoke endpoint MUST refuse names
+        // outside that list with a 404 — they are not part of the
+        // visible catalog from the SPA's perspective. Pin the fix for
+        // the Codex P1 finding.
+        $this->bootRegistry(allowedTools: ['kb.search']);
+        $this->bootHandshake([['name' => 'kb.delete', 'destructive' => true]]);
+        $this->bootInvoker();
+        InjectTenantMiddleware::$tenantId = 'acme';
+
+        $response = $this->postJson('/api/admin/mcp-pack/servers/srv-a/tools/kb.delete/invoke', [
+            'arguments' => ['id' => 1],
+        ]);
+        $response->assertStatus(404);
+        $this->assertSame('not_found', $response->json('error.code'));
     }
 
     public function test_invoke_502_on_transport_exception(): void

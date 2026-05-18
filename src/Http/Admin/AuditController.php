@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeIdentityContract;
+use Padosoft\AskMyDocsMcpPack\Exceptions\InvalidConfirmTokenException;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\MintsConfirmTokens;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\ResolvesAdminContext;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\ReplayAuditRequest;
@@ -185,10 +186,12 @@ final class AuditController
             });
         }
 
-        // Consume path — validate the package's mint marker, then
-        // hand off to the host bridge which performs the atomic
-        // `lockForUpdate` + `used_at` write + replay in one transaction.
-        $invalid = $this->validateConfirmToken(
+        // Consume path — atomic single-use consume via the host
+        // bridge (which holds a DB::transaction + lockForUpdate until
+        // the `used_at` write commits, then runs the replay business
+        // logic atomically). Forged / expired / cross-tenant tokens
+        // surface as 422 `confirmation_invalid`.
+        $invalid = $this->consumeConfirmToken(
             scope: McpAdminConfirmToken::SCOPE_AUDIT_REPLAY,
             targetId: (string) $id,
             tenantId: $tenantId,
@@ -204,16 +207,14 @@ final class AuditController
             if ($row === null) {
                 return $this->notFound("Audit row [{$id}] not found.");
             }
-            $result = $this->identityBridge->replayAudit($id, $confirmToken);
-            // R21: best-effort forget on success — the host's
-            // `used_at` flag is the source of truth, this is the
-            // package's defence-in-depth so the cache marker can't
-            // be re-presented.
-            $this->forgetConfirmToken(
-                scope: McpAdminConfirmToken::SCOPE_AUDIT_REPLAY,
-                targetId: (string) $id,
-                token: $confirmToken,
-            );
+            try {
+                $result = $this->identityBridge->replayAudit($id, $confirmToken);
+            } catch (InvalidConfirmTokenException $e) {
+                // Host's atomic consume rejected the token (e.g. used
+                // by a parallel request, expired, mismatch). Surface
+                // as the documented 422 instead of bubbling to 500.
+                return $this->confirmTokenInvalid($e->getMessage());
+            }
             return new JsonResponse(['data' => $result]);
         });
     }

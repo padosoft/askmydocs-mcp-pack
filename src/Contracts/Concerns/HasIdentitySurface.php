@@ -2,11 +2,14 @@
 
 namespace Padosoft\AskMyDocsMcpPack\Contracts\Concerns;
 
+use Illuminate\Support\Facades\Cache;
 use Padosoft\AskMyDocsMcpPack\Exceptions\HostFeatureNotImplementedException;
+use Padosoft\AskMyDocsMcpPack\Exceptions\InvalidConfirmTokenException;
 use Padosoft\AskMyDocsMcpPack\Support\HostApiKey;
 use Padosoft\AskMyDocsMcpPack\Support\HostTenant;
 use Padosoft\AskMyDocsMcpPack\Support\HostUser;
 use Padosoft\AskMyDocsMcpPack\Support\HostUserPreferences;
+use Padosoft\AskMyDocsMcpPack\Support\McpAdminConfirmToken;
 
 /**
  * v1.5.0 — default implementation of the 9 identity / audit-replay /
@@ -112,5 +115,71 @@ trait HasIdentitySurface
     public function resetBreaker(string $serverId, string $toolName, ?string $token = null): bool
     {
         throw HostFeatureNotImplementedException::forFeature('resetBreaker');
+    }
+
+    /**
+     * v1.5.0 W1.C iter-1 — default confirm-token persistence via the
+     * configured cache store. Production hosts SHOULD override with
+     * the DB-backed pattern documented on
+     * {@see \Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeIdentityContract::mintConfirmToken()}
+     * so R21 atomic single-use semantics actually hold across
+     * concurrent presents.
+     *
+     * The trait default keeps the package self-contained for hosts
+     * that have not yet wired their own confirm-token storage — the
+     * SPA's destructive-action UX works for free.
+     */
+    public function mintConfirmToken(McpAdminConfirmToken $token): void
+    {
+        $ttl = max(1, $token->expiresAt - time());
+        Cache::put(
+            self::confirmTokenCacheKey($token->scope, $token->targetId, $token->token),
+            [
+                'scope' => $token->scope,
+                'target_id' => $token->targetId,
+                'tenant_id' => $token->tenantId,
+                'expires_at' => $token->expiresAt,
+            ],
+            $ttl,
+        );
+    }
+
+    /**
+     * v1.5.0 W1.C iter-1 — default consume via `Cache::pull` (atomic
+     * remove + fetch on Redis; race-windowed on file/array). Throws
+     * {@see InvalidConfirmTokenException} on any failure mode so the
+     * admin controllers can map to HTTP 422 `confirmation_invalid`.
+     *
+     * Tenant binding is STRICT: a token minted with a concrete tenant
+     * MUST be presented under that same tenant; `null` minted MUST be
+     * `null` presented. No `null ↔ non-null` transitions.
+     */
+    public function consumeConfirmToken(string $token, string $scope, string $targetId, ?string $tenantId): void
+    {
+        $key = self::confirmTokenCacheKey($scope, $targetId, $token);
+        $record = Cache::pull($key);
+        if (! is_array($record)) {
+            throw InvalidConfirmTokenException::forForged($token, $scope);
+        }
+        if (($record['scope'] ?? null) !== $scope) {
+            throw InvalidConfirmTokenException::forMismatch($token, 'scope');
+        }
+        if (($record['target_id'] ?? null) !== $targetId) {
+            throw InvalidConfirmTokenException::forMismatch($token, 'target_id');
+        }
+        // R30 strict tenant binding — null ↔ non-null mismatch is
+        // ALSO rejected, not silently tolerated.
+        $recordTenant = $record['tenant_id'] ?? null;
+        if ($recordTenant !== $tenantId) {
+            throw InvalidConfirmTokenException::forMismatch($token, 'tenant_id');
+        }
+        if (isset($record['expires_at']) && time() >= (int) $record['expires_at']) {
+            throw InvalidConfirmTokenException::forExpired($token, $scope);
+        }
+    }
+
+    private static function confirmTokenCacheKey(string $scope, string $targetId, string $token): string
+    {
+        return "mcp-pack.confirm-token:{$scope}:{$targetId}:{$token}";
     }
 }

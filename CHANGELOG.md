@@ -293,7 +293,10 @@ reached).
 
 #### Tests
 
-PHPUnit total: 223 → 281 (+58).
+PHPUnit total: 223 → 284 (+61) after the iter-1 fixes (originally +58
+on the first push; the 9 Copilot findings added 3 R21-pinning tests
+in the destructive-invoke flow, the rest are refactors that preserve
+count).
 
 - `ServersControllerInvokeTest` — 11 cases (happy, cross-tenant
   404, destructive confirm flow, transport 502, 502 on

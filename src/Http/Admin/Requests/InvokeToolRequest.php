@@ -18,10 +18,17 @@ use Illuminate\Validation\Validator;
  *                  schema — that's the upstream MCP server's job; the
  *                  point here is to keep log-injection / parser-confusion
  *                  payloads off the wire.
- *  - `confirm`   — optional boolean. Tools that advertise
+ *  - `confirm_token` — optional string. Tools that advertise
  *                  `destructive: true` in their handshake metadata
- *                  must be invoked with `confirm: true` or the
- *                  controller answers 422 `confirmation_required`.
+ *                  use the R21 single-use confirm-token two-call
+ *                  protocol: the first POST (no token) returns 202
+ *                  with a fresh `tok_*`; the second POST echoes the
+ *                  token. The controller mints + the host atomically
+ *                  consumes inside the same `DB::transaction` as the
+ *                  invocation. Iter-1 upgrade — the previous
+ *                  reusable-boolean `confirm` field allowed the same
+ *                  request body to be replayed indefinitely on a
+ *                  destructive admin path, defeating R21.
  *                  Read-only tools ignore the field.
  */
 final class InvokeToolRequest extends FormRequest
@@ -44,7 +51,10 @@ final class InvokeToolRequest extends FormRequest
             // be invocable with no arguments. `required` rejects
             // empty arrays in Laravel and would block that path.
             'arguments' => ['present', 'array'],
-            'confirm' => ['nullable', 'boolean'],
+            // R21: single-use confirm token for destructive tools.
+            // R19: matches the `tok_<hex>` format the controller
+            // mints — no `%` / `_` / wildcard chars admitted.
+            'confirm_token' => ['nullable', 'string', 'max:128', 'regex:/^tok_[a-f0-9]{32}$/'],
         ];
     }
 
@@ -129,16 +139,17 @@ final class InvokeToolRequest extends FormRequest
     /**
      * Normalised payload reaching the controller.
      *
-     * @return array{arguments:array<string,mixed>, confirm:bool}
+     * @return array{arguments:array<string,mixed>, confirm_token:?string}
      */
     public function payload(): array
     {
         $validated = $this->validated();
         /** @var array<string,mixed> $args */
         $args = $validated['arguments'] ?? [];
+        $token = $validated['confirm_token'] ?? null;
         return [
             'arguments' => $args,
-            'confirm' => (bool) ($validated['confirm'] ?? false),
+            'confirm_token' => is_string($token) && $token !== '' ? $token : null,
         ];
     }
 }

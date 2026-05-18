@@ -8,15 +8,18 @@ use Illuminate\Support\Facades\DB;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerMutableRegistryContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerRegistryContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpToolAuthorizerContract;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpServerNotFoundException;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpToolNotAuthorizedException;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpTransportException;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\MintsConfirmTokens;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\ResolvesAdminContext;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\InvokeToolRequest;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\StoreServerRequest;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\UpdateServerRequest;
 use Padosoft\AskMyDocsMcpPack\Services\McpHandshakeService;
 use Padosoft\AskMyDocsMcpPack\Services\ToolInvoker;
+use Padosoft\AskMyDocsMcpPack\Support\McpAdminConfirmToken;
 use Padosoft\AskMyDocsMcpPack\Support\McpServerPage;
 use Padosoft\AskMyDocsMcpPack\Support\ToolCallResult;
 
@@ -41,12 +44,14 @@ use Padosoft\AskMyDocsMcpPack\Support\ToolCallResult;
 final class ServersController
 {
     use ResolvesAdminContext;
+    use MintsConfirmTokens;
 
     public function __construct(
         private readonly McpServerRegistryContract $registry,
         private readonly McpServerMutableRegistryContract $mutableRegistry,
         private readonly McpHandshakeService $handshake,
         private readonly ToolInvoker $invoker,
+        private readonly McpToolAuthorizerContract $toolAuthorizer,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -342,11 +347,47 @@ final class ServersController
             return $this->notFound("Server [{$id}] not found.");
         }
 
+        // Iter-1 fix (P1): enforce the server-declared tool allowlist
+        // BEFORE handshake / authorizer / dispatch. A host config that
+        // declares `allowed_tools = [kb.search]` MUST refuse
+        // `POST /servers/{id}/tools/kb.delete/invoke` with a 404 — the
+        // allowlist is part of the visible tool catalog, anything else
+        // is "not a tool of this server" from the SPA's perspective.
+        $allowed = $server->allowedTools();
+        if ($allowed !== [] && ! in_array($toolName, $allowed, strict: true)) {
+            return $this->notFound("Tool [{$toolName}] is not in server [{$server->id()}]'s allowed catalog.");
+        }
+
+        // Iter-1 fix (P1): consult the host's tool authorizer BEFORE
+        // dispatch. `ToolInvoker::invoke()` does not call the
+        // authorizer itself; the normal tool-calling path goes
+        // through `McpToolCallingService` which wraps the authorizer
+        // around each `RemoteMcpTool`. The admin invoke path bypasses
+        // that wrapper, so we synthesise a `RemoteMcpTool` view of
+        // the call and ask the authorizer directly.
+        $tenantId = $this->resolveTenantId($request);
+        $actor = $this->resolveActor($request);
+        $toolFacade = new \Padosoft\AskMyDocsMcpPack\Services\RemoteMcpTool(
+            name: $toolName,
+            payload: ['description' => "Admin invoke of {$toolName} on {$server->id()}"],
+            server: $server,
+            invoker: $this->invoker,
+        );
+        if (! $this->toolAuthorizer->authorize($actor, $tenantId, $toolFacade)) {
+            return new JsonResponse([
+                'error' => [
+                    'code' => 'not_authorized',
+                    'message' => "Actor is not authorized to invoke tool [{$toolName}] on server [{$server->id()}].",
+                ],
+            ], 403);
+        }
+
         $payload = $request->payload();
 
         // Destructive-tool guard. The handshake's tool list carries
         // per-tool metadata; a tool advertising `destructive: true`
-        // requires explicit `confirm: true` from the operator.
+        // requires a fresh single-use confirm token (R21 — iter-1
+        // upgrade from the previous reusable-boolean design).
         try {
             $isDestructive = $this->isDestructive($server, $toolName);
         } catch (McpTransportException $e) {
@@ -358,19 +399,34 @@ final class ServersController
             ], 502);
         }
 
-        if ($isDestructive && ! $payload['confirm']) {
-            return new JsonResponse([
-                'error' => [
-                    'code' => 'confirmation_required',
-                    'message' => "Tool [{$toolName}] is destructive; resend with `confirm: true` to invoke.",
-                ],
-            ], 422);
+        if ($isDestructive) {
+            $confirmToken = $payload['confirm_token'] ?? null;
+            $confirmTargetId = $server->id() . ':' . $toolName;
+
+            if ($confirmToken === null) {
+                // Mint path — return 202 with a single-use token the
+                // operator must echo on the next POST.
+                return $this->mintConfirmToken(
+                    scope: McpAdminConfirmToken::SCOPE_TOOL_INVOKE,
+                    targetId: $confirmTargetId,
+                    tenantId: $tenantId,
+                );
+            }
+
+            $invalid = $this->consumeConfirmToken(
+                scope: McpAdminConfirmToken::SCOPE_TOOL_INVOKE,
+                targetId: $confirmTargetId,
+                tenantId: $tenantId,
+                token: $confirmToken,
+            );
+            if ($invalid !== null) {
+                return $invalid;
+            }
         }
 
-        $tenantId = $this->resolveTenantId($request);
         $context = [
             'tenant_id' => $tenantId,
-            'actor' => $this->resolveActor($request),
+            'actor' => $actor,
         ];
 
         $start = microtime(true);

@@ -38,9 +38,12 @@ namespace Padosoft\AskMyDocsMcpPack\Support;
  *  - `expires_at` — unix epoch seconds. Tokens are short-lived
  *                   (default 120s — see `replays_in_seconds` in the
  *                   controller); a token past `expires_at` is
- *                   rejected as `token_consumed` (same surface as
- *                   reuse — both are "this token can no longer be
- *                   used").
+ *                   rejected as `confirmation_invalid` with an
+ *                   `InvalidConfirmTokenException::forExpired()`
+ *                   message at the host bridge layer — the same wire
+ *                   envelope as reuse / forgery, because all four
+ *                   cases collapse to "this token cannot drive the
+ *                   action".
  *  - `used_at`    — unix epoch seconds when the host consumed the
  *                   token. `null` on freshly-minted tokens; set
  *                   inside the host's transaction once the action
@@ -50,8 +53,9 @@ final class McpAdminConfirmToken
 {
     public const SCOPE_AUDIT_REPLAY = 'audit_replay';
     public const SCOPE_BREAKER_RESET = 'breaker_reset';
+    public const SCOPE_TOOL_INVOKE = 'tool_invoke';
 
-    /** @param 'audit_replay'|'breaker_reset' $scope */
+    /** @param 'audit_replay'|'breaker_reset'|'tool_invoke' $scope */
     public function __construct(
         public readonly string $token,
         public readonly string $scope,
@@ -69,7 +73,7 @@ final class McpAdminConfirmToken
      * `padosoft/laravel-flow` token convention so the pack stays
      * consistent across the v4.x ecosystem.
      *
-     * @param 'audit_replay'|'breaker_reset' $scope
+     * @param 'audit_replay'|'breaker_reset'|'tool_invoke' $scope
      */
     public static function mint(
         string $scope,

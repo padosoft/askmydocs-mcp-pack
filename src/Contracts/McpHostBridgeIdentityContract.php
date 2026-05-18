@@ -168,4 +168,76 @@ interface McpHostBridgeIdentityContract extends McpHostBridgeContract
      * `false` when it was already closed (idempotent miss).
      */
     public function resetBreaker(string $serverId, string $toolName, ?string $token = null): bool;
+
+    /**
+     * v1.5.0 W1.C iter-1 — persist a confirm token so the host can
+     * consume it atomically later.
+     *
+     * The controller mints the token (cryptographic value + scope +
+     * target id + tenant id + expiry) and hands the value object to
+     * the host via this method. Hosts implement persistence
+     * appropriate to their platform:
+     *
+     *  - Default trait impl: `Cache::put()` keyed by the token,
+     *    TTL = `$token->expiresAt - now`. Works for single-node
+     *    deployments + atomic-cache stores (Redis SETNX); does NOT
+     *    survive cache evictions and offers limited audit trail.
+     *  - Production hosts: persist a row in a `mcp_admin_confirm_tokens`
+     *    table with `hashed_token`, `scope`, `target_id`, `tenant_id`,
+     *    `expires_at`, `used_at` (nullable). The `consume` path then
+     *    holds a `lockForUpdate()` until the `used_at` write commits
+     *    in the same `DB::transaction` as the business action — that
+     *    is the R21 single-source-of-truth.
+     *
+     * The host MUST NOT throw on duplicate mint of the SAME token
+     * value (the controller never reuses tokens for different mints,
+     * so duplicates indicate a retry the host should idempotently
+     * absorb).
+     */
+    public function mintConfirmToken(\Padosoft\AskMyDocsMcpPack\Support\McpAdminConfirmToken $token): void;
+
+    /**
+     * v1.5.0 W1.C iter-1 — atomic single-use consume of a confirm token.
+     *
+     * **R21 (security-invariants-atomic-or-absent)** — this method
+     * MUST run the lock + check + mark-used sequence inside a SINGLE
+     * `DB::transaction` closure with `lockForUpdate()` held until the
+     * `used_at` write commits. Anything less opens a TOCTOU race where
+     * two concurrent presents of the same token would both pass the
+     * "unused?" check. The reference pattern:
+     *
+     * ```php
+     * DB::transaction(function () use ($token, $scope, $targetId, $tenantId): void {
+     *     $row = ConfirmToken::where('hashed_token', hash('sha256', $token))
+     *         ->lockForUpdate()
+     *         ->first();
+     *     if (!$row || $row->used_at !== null
+     *         || $row->scope !== $scope
+     *         || $row->target_id !== $targetId
+     *         || $row->tenant_id !== $tenantId
+     *         || $row->expires_at < now()) {
+     *         throw InvalidConfirmTokenException::forForged($token, $scope);
+     *     }
+     *     $row->update(['used_at' => now()]);
+     * });
+     * ```
+     *
+     * Throws {@see \Padosoft\AskMyDocsMcpPack\Exceptions\InvalidConfirmTokenException}
+     * on any failure (forged, expired, scope/target/tenant mismatch,
+     * already-consumed). The admin controllers catch that exception
+     * and map it to HTTP 422 `confirmation_invalid`.
+     *
+     * The default trait impl uses `Cache::pull` (atomic remove +
+     * fetch) — race-free on Redis but not on file/array caches; hosts
+     * SHOULD override with the DB-backed pattern above for production
+     * deployments.
+     *
+     * Tenant binding rule: a token minted with a concrete tenant MUST
+     * be consumed under that same tenant. A token minted with `null`
+     * MUST be consumed under `null`. No `null ↔ non-null` transitions
+     * — that would let an actor whose tenant context was momentarily
+     * lost (mid-flight middleware change) consume a token they should
+     * not have access to.
+     */
+    public function consumeConfirmToken(string $token, string $scope, string $targetId, ?string $tenantId): void;
 }

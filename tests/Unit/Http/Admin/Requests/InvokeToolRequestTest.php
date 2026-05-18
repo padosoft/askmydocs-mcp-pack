@@ -44,20 +44,24 @@ class InvokeToolRequestTest extends TestCase
         $request = $this->buildRequest(['arguments' => []]);
         $request->validateResolved();
         $this->assertSame([], $request->payload()['arguments']);
-        $this->assertFalse($request->payload()['confirm']);
+        $this->assertNull($request->payload()['confirm_token']);
     }
 
-    public function test_confirm_must_be_boolean(): void
+    public function test_confirm_token_must_match_tok_regex(): void
     {
-        $errors = $this->fails(['arguments' => [], 'confirm' => 'maybe']);
-        $this->assertArrayHasKey('confirm', $errors);
+        // Iter-1 (W1.C): the destructive-tool path uses an R21
+        // single-use `tok_<32hex>` token, not a reusable boolean.
+        // Anything else is 422.
+        $errors = $this->fails(['arguments' => [], 'confirm_token' => 'maybe']);
+        $this->assertArrayHasKey('confirm_token', $errors);
     }
 
-    public function test_accepts_boolean_confirm(): void
+    public function test_accepts_valid_confirm_token(): void
     {
-        $request = $this->buildRequest(['arguments' => ['q' => 'hi'], 'confirm' => true]);
+        $token = 'tok_' . str_repeat('a', 32);
+        $request = $this->buildRequest(['arguments' => ['q' => 'hi'], 'confirm_token' => $token]);
         $request->validateResolved();
-        $this->assertTrue($request->payload()['confirm']);
+        $this->assertSame($token, $request->payload()['confirm_token']);
     }
 
     public function test_rejects_control_char_at_top_level_leaf(): void
