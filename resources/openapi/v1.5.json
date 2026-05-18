@@ -1,0 +1,621 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AskMyDocs MCP Pack — Admin REST surface",
+    "version": "1.5.0",
+    "description": "Read-mostly REST surface backing the standalone padosoft/askmydocs-mcp-pack-admin SPA. All routes are mounted under the configured prefix (default `api/admin/mcp-pack`).",
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "/api/admin/mcp-pack",
+      "description": "Default admin prefix"
+    }
+  ],
+  "tags": [
+    { "name": "Identity", "description": "Actor + tenants + API keys (W1.A)" },
+    { "name": "Servers", "description": "MCP server catalog CRUD (W1.B)" },
+    { "name": "Tools", "description": "Tool listing + admin-side invocation (W1.B / W1.C)" },
+    { "name": "Audit", "description": "Tool-call audit + replay (W1.C)" },
+    { "name": "Resilience", "description": "Circuit breaker view + reset (W1.C)" },
+    { "name": "Resources", "description": "Per-server resource tree (W1.D)" },
+    { "name": "Prompts", "description": "Per-server prompt catalog (W1.D)" },
+    { "name": "Events", "description": "Server-Sent Events stream (W1.D)" },
+    { "name": "Meta", "description": "OpenAPI self-description (W1.D)" }
+  ],
+  "paths": {
+    "/me": {
+      "get": {
+        "tags": ["Identity"],
+        "summary": "Current actor identity",
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HostUserEnvelope" } } } },
+          "401": { "description": "Unauthenticated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "403": { "description": "Feature disabled", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "501": { "description": "Host bridge not implemented", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/me/preferences": {
+      "post": {
+        "tags": ["Identity"],
+        "summary": "Persist per-user preferences (scoped to currentUser())",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["preferences"],
+                "properties": {
+                  "preferences": { "type": "object", "additionalProperties": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "OK" },
+          "401": { "description": "Unauthenticated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "422": { "description": "Validation error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ValidationError" } } } }
+        }
+      }
+    },
+    "/tenants": {
+      "get": {
+        "tags": ["Identity"],
+        "summary": "List tenants visible to the active actor",
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/HostTenant" } } } } } } }
+        }
+      }
+    },
+    "/api-keys": {
+      "get": {
+        "tags": ["Identity"],
+        "summary": "List API keys for the active user",
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/HostApiKey" } } } } } } }
+        }
+      },
+      "post": {
+        "tags": ["Identity"],
+        "summary": "Mint a new API key",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "scopes"],
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 150 },
+                  "scopes": { "type": "array", "items": { "type": "string", "pattern": "^[a-z0-9.-]+$" }, "minItems": 1 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Created — plaintext token surfaced exactly once", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HostApiKeyCreateEnvelope" } } } }
+        }
+      }
+    },
+    "/api-keys/{id}": {
+      "delete": {
+        "tags": ["Identity"],
+        "summary": "Revoke an API key",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9._\\-]+$" } }
+        ],
+        "responses": {
+          "200": { "description": "Revoked" },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/servers": {
+      "get": {
+        "tags": ["Servers"],
+        "summary": "Paginated server catalog",
+        "parameters": [
+          { "name": "tenant", "in": "query", "schema": { "type": "string" } },
+          { "name": "q", "in": "query", "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "schema": { "type": "string" } },
+          { "name": "transport", "in": "query", "schema": { "type": "string" } },
+          { "name": "enabled", "in": "query", "schema": { "type": "boolean" } },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1 } },
+          { "name": "per_page", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200 } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/McpServerPage" } } } }
+        }
+      },
+      "post": {
+        "tags": ["Servers"],
+        "summary": "Create a server",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/McpServerWrite" } } } },
+        "responses": {
+          "201": { "description": "Created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/McpServerEnvelope" } } } }
+        }
+      }
+    },
+    "/servers/{id}": {
+      "get": {
+        "tags": ["Servers"],
+        "summary": "Server detail",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/McpServerEnvelope" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      },
+      "patch": {
+        "tags": ["Servers"],
+        "summary": "Update a server",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9._\\-]+$" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/McpServerWrite" } } } },
+        "responses": {
+          "200": { "description": "Updated" }
+        }
+      },
+      "delete": {
+        "tags": ["Servers"],
+        "summary": "Delete a server",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9._\\-]+$" } }
+        ],
+        "responses": {
+          "200": { "description": "Deleted" }
+        }
+      }
+    },
+    "/servers/{id}/handshake": {
+      "post": {
+        "tags": ["Servers"],
+        "summary": "Re-run the initialize + tools/list handshake",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Handshake completed" }
+        }
+      }
+    },
+    "/servers/{id}/tools": {
+      "get": {
+        "tags": ["Tools"],
+        "summary": "Per-server tools catalog",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/Tool" } } } } } } }
+        }
+      }
+    },
+    "/servers/{id}/tools/{name}/invoke": {
+      "post": {
+        "tags": ["Tools"],
+        "summary": "Admin-side tool invocation (R21 confirm-token for destructive tools)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9._\\-]+$" } },
+          { "name": "name", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9._\\-]+$" } }
+        ],
+        "requestBody": { "required": false, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } } },
+        "responses": {
+          "200": { "description": "Result" },
+          "202": { "description": "Confirm-token minted for destructive invocation" },
+          "422": { "description": "Validation or confirm-token error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ValidationError" } } } }
+        }
+      }
+    },
+    "/tools": {
+      "get": {
+        "tags": ["Tools"],
+        "summary": "Flat aggregator across every visible server",
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/Tool" } } } } } } }
+        }
+      }
+    },
+    "/servers/{id}/resources": {
+      "get": {
+        "tags": ["Resources"],
+        "summary": "Per-server resource tree",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/Resource" } } } } } } }
+        }
+      }
+    },
+    "/servers/{id}/resources/{uri}": {
+      "get": {
+        "tags": ["Resources"],
+        "summary": "Per-server resource content",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "uri", "in": "path", "required": true, "schema": { "type": "string" }, "description": "URL-encoded resource URI, e.g. `mcp%3A%2F%2Fopenai%2Fdocs%2Freadme.md`" }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ResourceContentEnvelope" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/servers/{id}/prompts": {
+      "get": {
+        "tags": ["Prompts"],
+        "summary": "Per-server prompt catalog",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/Prompt" } } } } } } }
+        }
+      }
+    },
+    "/servers/{id}/prompts/{name}": {
+      "get": {
+        "tags": ["Prompts"],
+        "summary": "Single prompt detail",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/Prompt" } } } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/audit": {
+      "get": {
+        "tags": ["Audit"],
+        "summary": "Paginated audit query",
+        "parameters": [
+          { "name": "server_id", "in": "query", "schema": { "type": "string" } },
+          { "name": "tool_name", "in": "query", "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "schema": { "type": "string" } },
+          { "name": "from", "in": "query", "schema": { "type": "string", "format": "date-time" } },
+          { "name": "to", "in": "query", "schema": { "type": "string", "format": "date-time" } },
+          { "name": "per_page", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200 } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/AuditRow" } } } } } } }
+        }
+      }
+    },
+    "/audit/{id}": {
+      "get": {
+        "tags": ["Audit"],
+        "summary": "Single audit row drilldown",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9._\\-]+$" } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/AuditDetail" } } } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/audit/{id}/replay": {
+      "post": {
+        "tags": ["Audit"],
+        "summary": "Replay an audited tool call (two-call confirm-token protocol)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9._\\-]+$" } }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirm_token": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Replay executed" },
+          "202": { "description": "Confirm-token minted on first POST" },
+          "422": { "description": "Invalid confirm token", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/circuit-breaker": {
+      "get": {
+        "tags": ["Resilience"],
+        "summary": "Snapshot every known breaker",
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/BreakerState" } } } } } } }
+        }
+      }
+    },
+    "/circuit-breaker/{key}/reset": {
+      "post": {
+        "tags": ["Resilience"],
+        "summary": "Reset a circuit breaker (two-call confirm-token protocol)",
+        "parameters": [
+          { "name": "key", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9.:_\\-]+$" } }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirm_token": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Breaker reset" },
+          "202": { "description": "Confirm-token minted" },
+          "422": { "description": "Invalid confirm token", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/events": {
+      "get": {
+        "tags": ["Events"],
+        "summary": "Server-Sent Events stream of audit invocations",
+        "responses": {
+          "200": {
+            "description": "text/event-stream — one `event: invocation\\ndata: <json>\\n\\n` frame per new audit row",
+            "content": {
+              "text/event-stream": {
+                "schema": { "$ref": "#/components/schemas/Event" }
+              }
+            }
+          },
+          "501": { "description": "Host bridge does not implement recentAudit()", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": ["Meta"],
+        "summary": "This OpenAPI 3.1 specification",
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": {} } }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" }
+            }
+          }
+        }
+      },
+      "ValidationError": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" },
+          "errors": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "string" } } }
+        }
+      },
+      "HostUser": {
+        "type": "object",
+        "properties": {
+          "id": { "oneOf": [{ "type": "integer" }, { "type": "string" }] },
+          "email": { "type": "string", "format": "email" },
+          "name": { "type": "string" },
+          "initials": { "type": "string" },
+          "tenant_id": { "type": ["string", "null"] },
+          "permissions": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "HostUserEnvelope": {
+        "type": "object",
+        "properties": {
+          "data": { "$ref": "#/components/schemas/HostUser" },
+          "meta": { "type": "object", "properties": { "tenant_id": { "type": ["string", "null"] } } }
+        }
+      },
+      "HostTenant": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "primary": { "type": "boolean" }
+        }
+      },
+      "HostApiKey": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "scopes": { "type": "array", "items": { "type": "string" } },
+          "last_used_at": { "type": ["integer", "string", "null"] },
+          "created_at": { "type": ["integer", "string"] },
+          "created_by": { "type": ["string", "null"] }
+        }
+      },
+      "HostApiKeyCreateEnvelope": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "allOf": [
+              { "$ref": "#/components/schemas/HostApiKey" },
+              {
+                "type": "object",
+                "properties": {
+                  "plaintext": { "type": "string", "description": "Surfaced exactly once at create time" }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "McpServer": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "transport": { "type": "string", "enum": ["http", "sse", "stdio"] },
+          "url": { "type": "string" },
+          "status": { "type": "string", "enum": ["ok", "warn", "err"] },
+          "enabled": { "type": "boolean" },
+          "tenant": { "type": "string" }
+        }
+      },
+      "McpServerWrite": {
+        "type": "object",
+        "required": ["name", "transport"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "transport": { "type": "string", "enum": ["http", "sse", "stdio"] },
+          "url": { "type": "string" },
+          "enabled": { "type": "boolean" }
+        }
+      },
+      "McpServerEnvelope": {
+        "type": "object",
+        "properties": {
+          "data": { "$ref": "#/components/schemas/McpServer" }
+        }
+      },
+      "McpServerPage": {
+        "type": "object",
+        "properties": {
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/McpServer" } },
+          "meta": {
+            "type": "object",
+            "properties": {
+              "current_page": { "type": "integer" },
+              "last_page": { "type": "integer" },
+              "per_page": { "type": "integer" },
+              "total": { "type": "integer" }
+            }
+          }
+        }
+      },
+      "Tool": {
+        "type": "object",
+        "properties": {
+          "server_id": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "input_schema": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "AuditRow": {
+        "type": "object",
+        "properties": {
+          "id": { "oneOf": [{ "type": "integer" }, { "type": "string" }] },
+          "tenant_id": { "type": ["string", "null"] },
+          "actor": { "type": ["string", "null"] },
+          "mcp_server_id": { "type": "string" },
+          "mcp_server_name": { "type": "string" },
+          "tool_name": { "type": "string" },
+          "duration_ms": { "type": "integer" },
+          "status": { "type": "string" },
+          "error_excerpt": { "type": ["string", "null"] },
+          "created_at": { "type": ["string", "null"], "format": "date-time" }
+        }
+      },
+      "AuditDetail": {
+        "allOf": [
+          { "$ref": "#/components/schemas/AuditRow" },
+          {
+            "type": "object",
+            "properties": {
+              "request": { "type": "object", "additionalProperties": true },
+              "response": { "type": "object", "additionalProperties": true },
+              "headers": { "type": "object", "additionalProperties": true },
+              "timeline": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+              "meta": { "type": "object", "additionalProperties": true }
+            }
+          }
+        ]
+      },
+      "BreakerState": {
+        "type": "object",
+        "properties": {
+          "key": { "type": "string" },
+          "server_id": { "type": "string" },
+          "tool_name": { "type": "string" },
+          "state": { "type": "string", "enum": ["closed", "open", "half_open"] },
+          "failures": { "type": "integer" },
+          "opened_at": { "type": ["integer", "string", "null"] }
+        }
+      },
+      "Resource": {
+        "type": "object",
+        "required": ["uri", "name", "type"],
+        "properties": {
+          "uri": { "type": "string" },
+          "name": { "type": "string" },
+          "type": { "type": "string", "enum": ["dir", "file"] },
+          "mime": { "type": "string" },
+          "size": { "type": "integer" },
+          "parent": { "type": "string" }
+        }
+      },
+      "ResourceContentEnvelope": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "uri": { "type": "string" },
+              "name": { "type": "string" },
+              "mime": { "type": "string" },
+              "size": { "type": "integer" },
+              "content": { "type": "string", "description": "Plain string OR base64-encoded payload for binary resources" }
+            }
+          }
+        }
+      },
+      "Prompt": {
+        "type": "object",
+        "required": ["name", "args", "preview"],
+        "properties": {
+          "name": { "type": "string" },
+          "desc": { "type": "string" },
+          "args": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "preview": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "properties": {
+          "id": { "oneOf": [{ "type": "integer" }, { "type": "string" }] },
+          "ts": { "oneOf": [{ "type": "integer" }, { "type": "string" }] },
+          "server_id": { "type": "string" },
+          "tool": { "type": "string" },
+          "status": { "oneOf": [{ "type": "integer" }, { "type": "string" }] },
+          "dur": { "type": "integer" },
+          "actor": { "type": "string" }
+        }
+      }
+    }
+  }
+}

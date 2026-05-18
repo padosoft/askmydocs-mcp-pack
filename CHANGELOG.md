@@ -6,6 +6,127 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### v1.5.0 — REST surface extension (W1.D — Resources + Prompts + SSE + OpenAPI)
+
+W1.D ships the final wave of the v1.5 REST extension. Six new
+endpoints cover the per-server resources tree + single resource
+content, the per-server prompts catalog + single prompt detail, a
+Server-Sent-Events live stream of recent audit invocations, and the
+canonical OpenAPI 3.1 self-description. Net REST surface delta vs
+v1.4: +16 endpoints (the full 6 → 22 progression). v1.5.0 GA tag
+follows once R36 closes on the PR.
+
+#### Added — `McpHostBridgeIdentityContract` resources/prompts/SSE surface
+
+Five new optional methods on the contract sub-interface; every
+existing host bridge keeps compiling because the new methods inherit
+sensible defaults from `HasIdentitySurface`, which throws
+`HostFeatureNotImplementedException` (translated to HTTP 501 by the
+admin controllers).
+
+- `listResources(string $serverId, ?string $tenantId): array` — tree
+  payload for `GET /servers/{id}/resources`.
+- `resourceContent(string $serverId, string $uri, ?string $tenantId): ?array`
+  — single resource content for `GET /servers/{id}/resources/{uri}`;
+  `null` on missing / cross-tenant (R30: 404, indistinguishable).
+- `listPrompts(string $serverId, ?string $tenantId): array` —
+  prompt catalog for `GET /servers/{id}/prompts`.
+- `promptDetail(string $serverId, string $name, ?string $tenantId): ?array`
+  — single prompt for `GET /servers/{id}/prompts/{name}`; `null` on
+  missing / cross-tenant.
+- `recentAudit(int|string|null $sinceId, ?string $tenantId): array`
+  — driver for the `GET /events` SSE stream's poll loop.
+
+#### Added — new controllers under `src/Http/Admin/`
+
+- `ResourcesController` — `GET /servers/{id}/resources` +
+  `GET /servers/{id}/resources/{uri}`. The `{uri}` route segment is
+  matched by regex `.+` (the SPA sends a URL-encoded URI, which
+  Symfony's router `rawurldecode`s once before matching — `[^/]+`
+  would reject any URI containing `/`). The controller calls
+  `rawurldecode()` once defensively (no-op when the router already
+  decoded), then forwards the literal URI to the bridge. R19 — host
+  owns any further escaping.
+- `PromptsController` — `GET /servers/{id}/prompts` +
+  `GET /servers/{id}/prompts/{name}`. Same R30 + 404-on-cross-tenant
+  semantics as `ResourcesController`.
+- `EventsSseController` — `GET /events`, `Content-Type: text/event-stream`.
+  Polls `recentAudit()` at `mcp-pack.admin.sse.poll_ms` cadence
+  (default 1000ms, minimum 100ms) and emits one
+  `event: invocation\ndata: <json>\n\n` frame per new row. Hard-caps
+  each connection at `mcp-pack.admin.sse.max_seconds` (default 300s)
+  so a hung client cannot starve PHP-FPM workers forever. Probes the
+  bridge ONCE up-front so a missing impl surfaces as a normal 501
+  JSON envelope instead of a 200 stream with no data. Streams via
+  `Symfony\Component\HttpFoundation\StreamedResponse` directly.
+- `OpenApiController` — `GET /openapi.json`. Serves the canonical
+  OpenAPI 3.1 spec from a static file at `resources/openapi/v1.5.json`.
+  Memoised in a static property so subsequent requests within the
+  same worker are O(1). Validates the JSON parses at load time — a
+  malformed spec is a packaging bug, surfaces as HTTP 500
+  `openapi_spec_unavailable`.
+
+#### Added — OpenAPI 3.1 specification (`resources/openapi/v1.5.json`)
+
+Single static JSON file covering every one of the 22 endpoints
+v1.5 ships across W1.A → W1.D. Component schemas mirror the
+`Downloads/askmydocs-mcp-pack-web-panel/project/data.js` reference
+data model: `HostUser`, `HostTenant`, `HostApiKey`, `McpServer`,
+`McpServerPage`, `McpServerWrite`, `Tool`, `AuditRow`, `AuditDetail`,
+`BreakerState`, `Resource`, `ResourceContentEnvelope`, `Prompt`,
+`Event`, plus `Error` / `ValidationError` envelopes. The SPA's
+OpenAPI viewer pane consumes this directly without any host code
+changes.
+
+#### Added — per-feature flags
+
+- `mcp-pack.admin.features.resources` (default `true`)
+- `mcp-pack.admin.features.prompts` (default `true`)
+- `mcp-pack.admin.features.events_sse` (default `true`)
+- `mcp-pack.admin.features.openapi` (default `true`)
+
+All four follow the standing W1.A pattern: routes registered
+UNCONDITIONALLY, the per-feature check happens inside the controller
+via `ResolvesAdminContext::featureGate()`, flipping a flag to `false`
+returns HTTP 403 `feature_disabled` (NOT 404). The SPA can
+distinguish "operator turned this section off" from "route does not
+exist on this package version".
+
+#### Added — SSE knobs
+
+- `mcp-pack.admin.sse.poll_ms` — poll cadence for `recentAudit()`
+  (default 1000, minimum 100). Lower values stream more aggressively
+  but spend more PHP-FPM cycles per worker; raise above 1000ms for
+  audit-only views that don't need real-time fidelity.
+- `mcp-pack.admin.sse.max_seconds` — hard-cap on each connection's
+  lifetime (default 300, minimum 1). The SPA's `EventSource`
+  auto-reconnects when the stream ends, so this is a worker-hygiene
+  knob rather than a UX one.
+
+#### Added — tests
+
+41 new tests across 6 files (full v1.5 W1.D delta) — bringing the
+suite from 284 to 324. New files:
+
+- `tests/Feature/Http/Admin/ResourcesControllerTest.php` (12 tests)
+- `tests/Feature/Http/Admin/PromptsControllerTest.php` (10 tests)
+- `tests/Feature/Http/Admin/EventsSseControllerTest.php` (5 tests)
+- `tests/Feature/Http/Admin/OpenApiControllerTest.php` (3 tests)
+- `tests/Feature/Http/Admin/W1DRoutesRegisteredTest.php` (1 test —
+  architecture-style guard that all 6 W1.D routes stay registered
+  when every feature flag is `false`)
+- `tests/Unit/Http/OpenApiSpecFileTest.php` (4 tests — schema-file
+  integrity: parses as JSON, declares OpenAPI 3.1, contains all 22
+  endpoint paths in lock-step with the route set, declares the
+  required component schemas)
+
+Extended `tests/Support/FakeIdentityBridge.php` with `listResources`,
+`resourceContent`, `listPrompts`, `promptDetail`, `recentAudit` stubs
+following the same observable-property pattern as the W1.A/W1.C
+methods. Extended `tests/Unit/Defaults/NullMcpHostBridgeIdentityTest.php`
+with 5 new asserts verifying each new trait default throws
+`HostFeatureNotImplementedException`.
+
 ### v1.5.0 — REST surface extension (W1.A — identity surface)
 
 The package is growing a 16-endpoint REST surface across four

@@ -69,4 +69,36 @@ class NullMcpHostBridgeIdentityTest extends TestCase
         $this->expectException(\LogicException::class);
         $bridge->chat(new \Padosoft\AskMyDocsMcpPack\Support\HostChatTurn(messages: [], tools: []));
     }
+
+    // ----- v1.5.0 W1.D — resources / prompts / SSE defaults ----------
+
+    public function test_list_resources_throws(): void
+    {
+        $this->expectException(HostFeatureNotImplementedException::class);
+        (new NullMcpHostBridge())->listResources('srv_01');
+    }
+
+    public function test_resource_content_throws(): void
+    {
+        $this->expectException(HostFeatureNotImplementedException::class);
+        (new NullMcpHostBridge())->resourceContent('srv_01', 'mcp://x');
+    }
+
+    public function test_list_prompts_throws(): void
+    {
+        $this->expectException(HostFeatureNotImplementedException::class);
+        (new NullMcpHostBridge())->listPrompts('srv_01');
+    }
+
+    public function test_prompt_detail_throws(): void
+    {
+        $this->expectException(HostFeatureNotImplementedException::class);
+        (new NullMcpHostBridge())->promptDetail('srv_01', 'research_brief');
+    }
+
+    public function test_recent_audit_throws(): void
+    {
+        $this->expectException(HostFeatureNotImplementedException::class);
+        (new NullMcpHostBridge())->recentAudit();
+    }
 }

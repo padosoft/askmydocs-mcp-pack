@@ -23,7 +23,11 @@ use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpToolAuthorizer;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\ApiKeysController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\AuditController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\CircuitBreakerController;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\EventsSseController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\MeController;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\OpenApiController;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\PromptsController;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\ResourcesController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\ServersController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\TenantsController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\ToolsController;
@@ -254,6 +258,51 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
                     // path separators.
                 ->where('id', '[A-Za-z0-9._\-]+')
                 ->name('mcp-pack.admin.api-keys.destroy');
+
+            // v1.5.0 W1.D — Resources + Prompts + SSE + OpenAPI.
+            // Same UNCONDITIONAL-registration pattern as W1.A/B/C:
+            // per-feature gates (`resources`, `prompts`,
+            // `events_sse`, `openapi`) are checked inside the
+            // controllers via `ResolvesAdminContext::featureGate()`
+            // so a runtime flag flip surfaces as HTTP 403
+            // `feature_disabled` (not 404).
+            //
+            // The `{uri}` segment uses `.+` (NOT `[^/]+` — see the
+            // explanatory comment on the route below) so URIs that
+            // contain literal `/` (e.g. `mcp://openai/docs/readme.md`)
+            // match correctly after Symfony's router decodes the
+            // path. The controller receives the parameter ALREADY
+            // decoded by Symfony (decode-exactly-once, R19) and
+            // forwards it to the bridge as-is.
+            Route::get('servers/{id}/resources', [ResourcesController::class, 'index'])
+                ->where('id', '[A-Za-z0-9._\-]+')
+                ->name('mcp-pack.admin.servers.resources.index');
+            // The `{uri}` regex is `.+` (not `[^/]+`) because the SPA
+            // sends URIs like `mcp://openai/docs/readme.md` which
+            // contain literal `/` AFTER Symfony's router has
+            // `rawurldecode()`d the path (per UrlMatcher line 73).
+            // `[^/]+` would 404 on every URI that has a path
+            // component. `.+` is safe because the route prefix
+            // anchors `/servers/{id}/resources/` so there is no
+            // ambiguity with sibling routes. The controller receives
+            // Symfony's already-decoded parameter and forwards it to
+            // the bridge unchanged (decode-exactly-once, R19).
+            Route::get('servers/{id}/resources/{uri}', [ResourcesController::class, 'show'])
+                ->where('id', '[A-Za-z0-9._\-]+')
+                ->where('uri', '.+')
+                ->name('mcp-pack.admin.servers.resources.show');
+
+            Route::get('servers/{id}/prompts', [PromptsController::class, 'index'])
+                ->where('id', '[A-Za-z0-9._\-]+')
+                ->name('mcp-pack.admin.servers.prompts.index');
+            Route::get('servers/{id}/prompts/{name}', [PromptsController::class, 'show'])
+                ->where('id', '[A-Za-z0-9._\-]+')
+                ->where('name', '[A-Za-z0-9._\-]+')
+                ->name('mcp-pack.admin.servers.prompts.show');
+
+            Route::get('events', EventsSseController::class)->name('mcp-pack.admin.events');
+
+            Route::get('openapi.json', OpenApiController::class)->name('mcp-pack.admin.openapi');
         });
     }
 
