@@ -4,10 +4,16 @@ namespace Padosoft\AskMyDocsMcpPack\Http\Admin;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeIdentityContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerRegistryContract;
+use Padosoft\AskMyDocsMcpPack\Exceptions\InvalidConfirmTokenException;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\MintsConfirmTokens;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\ResolvesAdminContext;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\ResetBreakerRequest;
 use Padosoft\AskMyDocsMcpPack\Resilience\CircuitBreaker;
 use Padosoft\AskMyDocsMcpPack\Services\McpHandshakeService;
+use Padosoft\AskMyDocsMcpPack\Support\McpAdminConfirmToken;
 
 /**
  * v1.4.0 — read-only inspection of the per-(server, tool) circuit
@@ -22,14 +28,29 @@ use Padosoft\AskMyDocsMcpPack\Services\McpHandshakeService;
  *     state for every tool the server's handshake-cached catalog
  *     advertises (or every entry in the configured `allowedTools()`
  *     list, whichever is non-empty).
+ *
+ * v1.5.0 W1.C adds `reset(string $key)` —
+ * `POST /circuit-breaker/{key}/reset` where `key` is the URL-encoded
+ * `<server_id>:<tool_name>` compound. Two-call confirm-token protocol
+ * (R21 atomic single-use); host bridge owns the lock+consume+reset
+ * inside a `DB::transaction` closure.
  */
 final class CircuitBreakerController
 {
+    use ResolvesAdminContext;
+    use MintsConfirmTokens;
+
     public function __construct(
         private readonly CircuitBreaker $breaker,
         private readonly McpServerRegistryContract $registry,
         private readonly McpHandshakeService $handshake,
+        private readonly McpHostBridgeIdentityContract $identityBridge,
     ) {}
+
+    public function index(Request $request): JsonResponse
+    {
+        return $this->__invoke($request);
+    }
 
     public function __invoke(Request $request): JsonResponse
     {
@@ -77,6 +98,109 @@ final class CircuitBreakerController
     }
 
     /**
+     * v1.5.0 W1.C — `POST /circuit-breaker/{key}/reset`.
+     *
+     * `$key` is the URL-encoded `<server_id>:<tool_name>` compound.
+     * Two-call protocol mirroring `AuditController::replay()`:
+     *  1. First POST mints + parks a single-use confirm token.
+     *  2. Second POST presents the token; controller validates
+     *     mint-side, host atomically consumes + resets inside a
+     *     `DB::transaction`.
+     *
+     * Cross-tenant safety: the server must be visible to the active
+     * tenant; foreign-tenant ids 404 at mint time so an attacker
+     * can't even harvest a token for another tenant's breaker.
+     */
+    public function reset(ResetBreakerRequest $request, string $key): JsonResponse
+    {
+        $blocked = $this->featureGate('breaker_reset');
+        if ($blocked !== null) {
+            return $blocked;
+        }
+
+        $decoded = $this->decodeKey($key);
+        if ($decoded === null) {
+            return new JsonResponse([
+                'error' => [
+                    'code' => 'invalid_key',
+                    'message' => "Breaker key must be `<server_id>:<tool_name>`; got [{$key}].",
+                ],
+            ], 422);
+        }
+        [$serverId, $toolName] = $decoded;
+
+        $server = $this->findForActiveTenant($request, $serverId);
+        if ($server === null) {
+            return new JsonResponse([
+                'error' => ['code' => 'not_found', 'message' => "Server [{$serverId}] not found."],
+            ], 404);
+        }
+
+        $tenantId = $this->resolveTenantId($request);
+        $confirmToken = $request->confirmToken();
+        $targetId = $serverId . ':' . $toolName;
+
+        if ($confirmToken === null) {
+            return $this->mintConfirmToken(
+                scope: McpAdminConfirmToken::SCOPE_BREAKER_RESET,
+                targetId: $targetId,
+                tenantId: $tenantId,
+            );
+        }
+
+        $invalid = $this->consumeConfirmToken(
+            scope: McpAdminConfirmToken::SCOPE_BREAKER_RESET,
+            targetId: $targetId,
+            tenantId: $tenantId,
+            token: $confirmToken,
+        );
+        if ($invalid !== null) {
+            return $invalid;
+        }
+
+        return $this->withHostBridge(function () use ($serverId, $toolName, $confirmToken): JsonResponse {
+            try {
+                $changed = $this->identityBridge->resetBreaker($serverId, $toolName, $confirmToken);
+            } catch (InvalidConfirmTokenException $e) {
+                return $this->confirmTokenInvalid($e->getMessage());
+            }
+            return new JsonResponse([
+                'data' => [
+                    'server_id' => $serverId,
+                    'tool_name' => $toolName,
+                    'changed' => $changed,
+                ],
+            ]);
+        });
+    }
+
+    /**
+     * Decode the `<server_id>:<tool_name>` compound. We URL-decode
+     * once (Laravel does its own decoding for path segments, but a
+     * double-URL-encoded `%3A` is sometimes seen from over-cautious
+     * SPAs) and then split on the FIRST colon — server ids may
+     * contain `.` `_` `-` but never `:` (constrained by the route
+     * regex on the package's register-routes), so the first colon is
+     * the unambiguous separator.
+     *
+     * @return array{0:string,1:string}|null
+     */
+    private function decodeKey(string $key): ?array
+    {
+        $decoded = rawurldecode($key);
+        $pos = strpos($decoded, ':');
+        if ($pos === false || $pos === 0 || $pos === strlen($decoded) - 1) {
+            return null;
+        }
+        $serverId = substr($decoded, 0, $pos);
+        $toolName = substr($decoded, $pos + 1);
+        if ($serverId === '' || $toolName === '') {
+            return null;
+        }
+        return [$serverId, $toolName];
+    }
+
+    /**
      * In sweep mode (no explicit `tool`) the controller must list
      * EVERY tool the breaker tracks for this server. When
      * `allowedTools()` is non-empty that list is authoritative; when
@@ -116,19 +240,5 @@ final class CircuitBreakerController
             }
         }
         return null;
-    }
-
-    private function resolveTenantId(Request $request): ?string
-    {
-        $trustedAttribute = $request->attributes->get('mcp_pack.tenant_id');
-        if (is_string($trustedAttribute) && $trustedAttribute !== '') {
-            return $trustedAttribute;
-        }
-        $user = $request->user();
-        if ($user === null) {
-            return null;
-        }
-        $tenant = data_get($user, 'tenant_id');
-        return is_string($tenant) && $tenant !== '' ? $tenant : null;
     }
 }

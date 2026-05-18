@@ -205,8 +205,120 @@ package version".
 
 #### Sub-waves not yet shipped
 
-- W1.C — Audit drilldown + replay + breaker reset (atomic R21).
 - W1.D — Resources + Prompts + SSE + OpenAPI + `v1.5.0` tag.
+
+### v1.5.0 — REST surface extension (W1.C — Tool invoke + Audit replay + Breaker reset)
+
+W1.C closes the action surface for v1.5: the admin SPA can now
+invoke tools, drill into a single audit row, replay a previous
+tool call, and reset a circuit breaker — all under R30 cross-tenant
+isolation and R21 atomic single-use confirm-token semantics for
+destructive paths.
+
+#### Added — controller endpoints
+
+- **`POST /servers/{id}/tools/{name}/invoke`** —
+  `ServersController::invoke()` runs a single tool through the
+  existing `ToolInvoker`. The audit row is written by `ToolInvoker`
+  exactly like normal tool calls. The tool's `destructive: true`
+  metadata (declared by the upstream MCP server's `tools/list`
+  handshake) triggers a `confirmation_required` 422 unless the
+  request carries `confirm: true`. `McpToolNotAuthorizedException`
+  maps to 403 `not_authorized`; `McpTransportException` and any
+  error captured into `ToolCallResult` map to 502 `transport_error`
+  (R14 — no 200-on-failure).
+- **`GET /audit/{id}`** — `AuditController::show()` returns the
+  rich drilldown payload (request / response / headers / timeline /
+  meta) via the host bridge's new `auditFor(int|string $id, ?string
+  $tenantId)` method. The controller passes the trusted tenant id;
+  cross-tenant rows are invisible (404, not 403 — existence does
+  not leak per R30).
+- **`POST /audit/{id}/replay`** — `AuditController::replay()`
+  re-fires the audited tool call under a two-call confirm-token
+  protocol. First POST (no `confirm_token`) mints + caches the
+  token + 202; second POST presents the token; the controller
+  validates the mint-side marker then forwards to the host's
+  `replayAudit($id, $token)` which atomically consumes + replays
+  inside its own `DB::transaction` + `lockForUpdate()` closure.
+- **`POST /circuit-breaker/{key}/reset`** —
+  `CircuitBreakerController::reset()` mirrors the replay protocol.
+  `{key}` is the URL-encoded `<server_id>:<tool_name>` compound.
+
+#### Added — R21 confirm-token infrastructure
+
+- `Padosoft\AskMyDocsMcpPack\Support\McpAdminConfirmToken` — readonly
+  value object: `{token, scope, target_id, tenant_id, expires_at,
+  used_at}`. Token plaintext is `tok_` + 32 hex chars (128 bits of
+  entropy). Default TTL 120 s.
+- `Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\MintsConfirmTokens`
+  trait — shared mint + present + forget logic backed by the
+  configured cache store. The package owns mint + present; the host
+  owns atomic consume + `used_at` write inside a `DB::transaction`.
+- Contract docblocks on `McpHostBridgeIdentityContract::replayAudit()`
+  and `::resetBreaker()` document the host-side R21 contract
+  explicitly (lock window MUST hold until `used_at` write commits).
+
+#### Added — FormRequest classes
+
+- `InvokeToolRequest` — `arguments` MUST be present + array,
+  nesting ≤ 8 levels, every string leaf R19-scrubbed for control
+  characters; `confirm` optional boolean.
+- `ReplayAuditRequest` — optional `confirm_token` matching the
+  exact `tok_[a-f0-9]{32}` regex (R19 — narrow shape).
+- `ResetBreakerRequest` — same shape as the replay request.
+
+#### Added — config flags (default `true`)
+
+- `mcp-pack.admin.features.tool_invoke`
+- `mcp-pack.admin.features.audit_show`
+- `mcp-pack.admin.features.audit_replay`
+- `mcp-pack.admin.features.breaker_reset`
+
+Each backs an env var of the form
+`MCP_PACK_ADMIN_FEATURE_<UPPER>`. Routes are registered
+unconditionally; the per-feature gate happens inside the
+controller via `ResolvesAdminContext::featureGate()` so the SPA
+can distinguish "operator disabled this section" (403) from "this
+package version does not implement the section" (404 — never
+reached).
+
+#### Changed — contract signature
+
+- `McpHostBridgeIdentityContract::auditFor(int|string $id)` is now
+  `auditFor(int|string $id, ?string $tenantId = null)`. The
+  parameter is opt-in (default `null`) so existing implementations
+  keep compiling; new hosts MUST scope the SELECT by the trusted
+  tenant id passed in. `HasIdentitySurface` trait default updated
+  to match.
+
+#### Tests
+
+PHPUnit total: 223 → 284 (+61) after the iter-1 fixes (originally +58
+on the first push; the 9 Copilot findings added 3 R21-pinning tests
+in the destructive-invoke flow, the rest are refactors that preserve
+count).
+
+- `ServersControllerInvokeTest` — 15 cases (happy, cross-tenant
+  404, 404 tool not in allowlist, destructive mint, destructive
+  consume, destructive 422 reuse, destructive 422 forged,
+  transport 502, 502 on ToolCallResult.error, 403 not authorised,
+  403 feature flag, route stays registered, 422 missing arguments,
+  422 control char, 422 nesting depth).
+- `AuditControllerShowReplayTest` — 16 cases (drilldown happy,
+  404 missing, 404 cross-tenant, 403 feature flag, 501 unwired,
+  replay mint happy, mint 404 cross-tenant, mint 404 missing,
+  consume happy, consume 422 reuse, consume 422 forged, consume
+  422 malformed, consume 404 audit-disappeared, 403 feature
+  flag, 501 unwired, route registered).
+- `CircuitBreakerControllerResetTest` — 12 cases (mint happy,
+  mint 404 cross-tenant, 422 bad key, consume happy, consume 422
+  reuse, consume 422 forged, consume 422 malformed, consume 422
+  cross-target, 403 feature flag, 501 unwired, route registered,
+  404 bogus server).
+- `McpAdminConfirmTokenTest` — 8 cases (mint shape, entropy
+  uniqueness, default TTL, TTL floor, expiry check, used flag,
+  mint response shape, expired response clamps).
+- `InvokeToolRequestTest` — 10 cases (rules validation surface).
 
 ## [1.4.0] — 2026-05-15
 

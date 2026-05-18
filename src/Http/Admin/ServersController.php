@@ -8,13 +8,20 @@ use Illuminate\Support\Facades\DB;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerMutableRegistryContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerRegistryContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpToolAuthorizerContract;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpServerNotFoundException;
+use Padosoft\AskMyDocsMcpPack\Exceptions\McpToolNotAuthorizedException;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpTransportException;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\MintsConfirmTokens;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\ResolvesAdminContext;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\InvokeToolRequest;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\StoreServerRequest;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\UpdateServerRequest;
 use Padosoft\AskMyDocsMcpPack\Services\McpHandshakeService;
+use Padosoft\AskMyDocsMcpPack\Services\ToolInvoker;
+use Padosoft\AskMyDocsMcpPack\Support\McpAdminConfirmToken;
 use Padosoft\AskMyDocsMcpPack\Support\McpServerPage;
+use Padosoft\AskMyDocsMcpPack\Support\ToolCallResult;
 
 /**
  * v1.4.0 — admin REST surface for MCP server management.
@@ -37,11 +44,14 @@ use Padosoft\AskMyDocsMcpPack\Support\McpServerPage;
 final class ServersController
 {
     use ResolvesAdminContext;
+    use MintsConfirmTokens;
 
     public function __construct(
         private readonly McpServerRegistryContract $registry,
         private readonly McpServerMutableRegistryContract $mutableRegistry,
         private readonly McpHandshakeService $handshake,
+        private readonly ToolInvoker $invoker,
+        private readonly McpToolAuthorizerContract $toolAuthorizer,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -300,6 +310,213 @@ final class ServersController
             }
             return new JsonResponse(null, 204);
         });
+    }
+
+    /**
+     * v1.5.0 W1.C — `POST /servers/{id}/tools/{name}/invoke`.
+     *
+     * Three orthogonal concerns folded into one endpoint:
+     *
+     *  1. R30 — the server must be visible to the active tenant via
+     *     `findForActiveTenant(...)`; cross-tenant invokes 404.
+     *  2. Destructive-tool guard — tools advertising `destructive: true`
+     *     in their handshake metadata require `confirm: true` in the
+     *     request body, or the controller answers 422
+     *     `confirmation_required`. Read-only tools ignore the field.
+     *     The destructive flag is HOST-DECLARED via
+     *     {@see McpHandshakeService::refresh()} metadata, not inferred
+     *     from the name (the conservative name-heuristic in
+     *     {@see ToolsController} is a UI hint; here we need the
+     *     declared metadata so an operator's explicit `destructive=false`
+     *     override is honoured).
+     *  3. Tool dispatch + error mapping — {@see McpToolNotAuthorizedException}
+     *     → 403 `not_authorized`; {@see McpTransportException} → 502
+     *     `transport_error`. Any other failure surfaces via the audit
+     *     row's `status` + `error_excerpt` AND a 502 envelope
+     *     mirroring the underlying error (R14: no 200-on-failure).
+     */
+    public function invoke(InvokeToolRequest $request, string $id, string $toolName): JsonResponse
+    {
+        $blocked = $this->featureGate('tool_invoke');
+        if ($blocked !== null) {
+            return $blocked;
+        }
+
+        $server = $this->findForActiveTenant($request, $id);
+        if ($server === null) {
+            return $this->notFound("Server [{$id}] not found.");
+        }
+
+        // Iter-1 fix (P1): enforce the server-declared tool allowlist
+        // BEFORE handshake / authorizer / dispatch. A host config that
+        // declares `allowed_tools = [kb.search]` MUST refuse
+        // `POST /servers/{id}/tools/kb.delete/invoke` with a 404 — the
+        // allowlist is part of the visible tool catalog, anything else
+        // is "not a tool of this server" from the SPA's perspective.
+        $allowed = $server->allowedTools();
+        if ($allowed !== [] && ! in_array($toolName, $allowed, strict: true)) {
+            return $this->notFound("Tool [{$toolName}] is not in server [{$server->id()}]'s allowed catalog.");
+        }
+
+        // Iter-1 fix (P1): consult the host's tool authorizer BEFORE
+        // dispatch. `ToolInvoker::invoke()` does not call the
+        // authorizer itself; the normal tool-calling path goes
+        // through `McpToolCallingService` which wraps the authorizer
+        // around each `RemoteMcpTool`. The admin invoke path bypasses
+        // that wrapper, so we synthesise a `RemoteMcpTool` view of
+        // the call and ask the authorizer directly.
+        $tenantId = $this->resolveTenantId($request);
+        $actor = $this->resolveActor($request);
+        $toolFacade = new \Padosoft\AskMyDocsMcpPack\Services\RemoteMcpTool(
+            name: $toolName,
+            payload: ['description' => "Admin invoke of {$toolName} on {$server->id()}"],
+            server: $server,
+            invoker: $this->invoker,
+        );
+        if (! $this->toolAuthorizer->authorize($actor, $tenantId, $toolFacade)) {
+            return new JsonResponse([
+                'error' => [
+                    'code' => 'not_authorized',
+                    'message' => "Actor is not authorized to invoke tool [{$toolName}] on server [{$server->id()}].",
+                ],
+            ], 403);
+        }
+
+        $payload = $request->payload();
+
+        // Destructive-tool guard. The handshake's tool list carries
+        // per-tool metadata; a tool advertising `destructive: true`
+        // requires a fresh single-use confirm token (R21 — iter-1
+        // upgrade from the previous reusable-boolean design).
+        try {
+            $isDestructive = $this->isDestructive($server, $toolName);
+        } catch (McpTransportException $e) {
+            return new JsonResponse([
+                'error' => [
+                    'code' => 'transport_error',
+                    'message' => $e->getMessage(),
+                ],
+            ], 502);
+        }
+
+        if ($isDestructive) {
+            $confirmToken = $payload['confirm_token'] ?? null;
+            $confirmTargetId = $server->id() . ':' . $toolName;
+
+            if ($confirmToken === null) {
+                // Mint path — return 202 with a single-use token the
+                // operator must echo on the next POST.
+                return $this->mintConfirmToken(
+                    scope: McpAdminConfirmToken::SCOPE_TOOL_INVOKE,
+                    targetId: $confirmTargetId,
+                    tenantId: $tenantId,
+                );
+            }
+
+            $invalid = $this->consumeConfirmToken(
+                scope: McpAdminConfirmToken::SCOPE_TOOL_INVOKE,
+                targetId: $confirmTargetId,
+                tenantId: $tenantId,
+                token: $confirmToken,
+            );
+            if ($invalid !== null) {
+                return $invalid;
+            }
+        }
+
+        $context = [
+            'tenant_id' => $tenantId,
+            'actor' => $actor,
+        ];
+
+        $start = microtime(true);
+        try {
+            $result = $this->invoker->invoke($server, $toolName, $payload['arguments'], $context);
+        } catch (McpToolNotAuthorizedException $e) {
+            return new JsonResponse([
+                'error' => ['code' => 'not_authorized', 'message' => $e->getMessage()],
+            ], 403);
+        } catch (McpTransportException $e) {
+            return new JsonResponse([
+                'error' => ['code' => 'transport_error', 'message' => $e->getMessage()],
+            ], 502);
+        }
+
+        // R14: ToolInvoker captures the error inside ToolCallResult
+        // without re-throwing. We must NOT answer 200 on a failed
+        // call — map the error class onto an HTTP status the SPA can
+        // distinguish from a 200 success.
+        if ($result->isError()) {
+            return new JsonResponse([
+                'error' => [
+                    'code' => 'transport_error',
+                    'message' => $result->error,
+                ],
+                'data' => [
+                    'tool_call_id' => $result->toolCallId,
+                    'latency_ms' => (int) round($result->latencyMs),
+                ],
+            ], 502);
+        }
+
+        return new JsonResponse([
+            'data' => [
+                'tool_call_id' => $result->toolCallId,
+                'result' => $result->result,
+                'latency_ms' => (int) round($result->latencyMs),
+            ],
+        ]);
+    }
+
+    /**
+     * Look the tool up in the handshake-cached catalog and return
+     * whether the upstream MCP server flagged it `destructive: true`.
+     * `false` is the safe default — a tool the catalog has not heard
+     * of is treated as read-only (the upstream `tools/call` will
+     * reject it anyway, with a clearer error than a spurious
+     * confirmation prompt).
+     *
+     * @throws McpTransportException when handshake refresh fails
+     */
+    private function isDestructive(McpServerContract $server, string $toolName): bool
+    {
+        $payload = $this->handshake->refresh($server, force: false);
+        /** @var array<int,array<string,mixed>> $tools */
+        $tools = $payload['tools'] ?? [];
+        foreach ($tools as $tool) {
+            if ((string) ($tool['name'] ?? '') !== $toolName) {
+                continue;
+            }
+            return filter_var(
+                $tool['destructive'] ?? false,
+                FILTER_VALIDATE_BOOLEAN,
+            );
+        }
+        return false;
+    }
+
+    /**
+     * Best-effort actor extraction — the host's auth middleware sets
+     * `mcp_pack.actor` on the request attributes alongside
+     * `mcp_pack.tenant_id`. If absent, fall back to the authenticated
+     * user's id / email. Returns `null` for anonymous requests.
+     */
+    private function resolveActor(Request $request): ?string
+    {
+        $trusted = $request->attributes->get('mcp_pack.actor');
+        if (is_string($trusted) && $trusted !== '') {
+            return $trusted;
+        }
+        $user = $request->user();
+        if ($user === null) {
+            return null;
+        }
+        $email = data_get($user, 'email');
+        if (is_string($email) && $email !== '') {
+            return $email;
+        }
+        $userId = data_get($user, 'id');
+        return $userId !== null ? (string) $userId : null;
     }
 
     /** @return array<string,mixed> */

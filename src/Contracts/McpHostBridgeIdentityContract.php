@@ -104,27 +104,140 @@ interface McpHostBridgeIdentityContract extends McpHostBridgeContract
     public function savePreferences(int|string $userId, array $prefs): HostUserPreferences;
 
     /**
-     * (Signature reserved for W1.C) — single audit row + drilldown
-     * payload. Returns `null` when the row is not visible to the
-     * active tenant.
+     * v1.5.0 W1.C — single audit row + drilldown payload, scoped to
+     * the active tenant. Returns `null` when the row does not exist
+     * OR when it exists but belongs to a different tenant — the
+     * caller MUST NOT distinguish the two cases (404 in both, per
+     * R30: existence of cross-tenant rows must not leak).
+     *
+     * The controller passes the trusted tenant id (resolved from the
+     * `mcp_pack.tenant_id` middleware attribute) so the host can scope
+     * the SELECT without trusting wire input. `null` `$tenantId` means
+     * platform-global view — the host's auth middleware decided the
+     * actor is allowed to see every tenant's rows.
+     *
+     * Returned shape mirrors the SPA `AUDIT_DETAIL` fixture in
+     * `data.js`:
+     * `{id, ts, tenant, server, server_id, method, tool, status, dur,
+     *   actor, request, response, headers, timeline, meta}`.
      *
      * @return array<string,mixed>|null
      */
-    public function auditFor(int|string $id): ?array;
+    public function auditFor(int|string $id, ?string $tenantId = null): ?array;
 
     /**
-     * (Signature reserved for W1.C) — re-fire the audited tool call.
-     * Hosts MUST honour R21 single-use semantics on the `$token`
-     * argument inside a `DB::transaction` closure.
+     * v1.5.0 W1.C — re-fire the audited tool call.
+     *
+     * **R21 (security-invariants-atomic-or-absent)** — hosts MUST
+     * consume the `$token` argument inside a `DB::transaction` closure
+     * using `lockForUpdate()` on the confirm-token row, and the
+     * `used_at` write MUST happen in the SAME transaction. A two-step
+     * read-then-write that leaves the lock window before the write is
+     * a contract violation: two concurrent replays would both pass the
+     * "unused?" check and both fire, defeating the single-use
+     * semantics.
+     *
+     * The controller mints the token on the first POST (no token
+     * supplied) and returns it under a 202 envelope; the second POST
+     * carries the token back and that's the call that reaches the
+     * host. Tokens that are reused, forged, or expired MUST surface
+     * via the host throwing an exception the controller can map to
+     * 422 (the controller does not introspect the host's persistence
+     * — it owns mint + present, the host owns lock + consume + write).
+     *
+     * Returned shape: `{new_audit_id, result, latency_ms}` — the
+     * `new_audit_id` is the freshly-written `mcp_tool_call_audit` row
+     * so the SPA can deep-link to the replay.
      *
      * @return array<string,mixed>
      */
     public function replayAudit(int|string $id, ?string $token = null): array;
 
     /**
-     * (Signature reserved for W1.C) — reset the circuit breaker for
-     * `(serverId, toolName)` under an R21 single-use token guard.
-     * Returns `true` when the breaker had state to reset.
+     * v1.5.0 W1.C — reset the circuit breaker for `(serverId, toolName)`.
+     *
+     * **R21** — same atomicity contract as {@see replayAudit()}: the
+     * host MUST consume the `$token` inside a `DB::transaction` +
+     * `lockForUpdate()` closure on the confirm-token row, with the
+     * `used_at` write in the same transaction. The breaker mutation
+     * happens AFTER the token is consumed, but inside the same
+     * transaction so a transaction rollback also rolls back the
+     * breaker reset.
+     *
+     * Returns `true` when the breaker had non-closed state to reset,
+     * `false` when it was already closed (idempotent miss).
      */
     public function resetBreaker(string $serverId, string $toolName, ?string $token = null): bool;
+
+    /**
+     * v1.5.0 W1.C iter-1 — persist a confirm token so the host can
+     * consume it atomically later.
+     *
+     * The controller mints the token (cryptographic value + scope +
+     * target id + tenant id + expiry) and hands the value object to
+     * the host via this method. Hosts implement persistence
+     * appropriate to their platform:
+     *
+     *  - Default trait impl: `Cache::put()` keyed by the token,
+     *    TTL = `$token->expiresAt - now`. Works for single-node
+     *    deployments + atomic-cache stores (Redis SETNX); does NOT
+     *    survive cache evictions and offers limited audit trail.
+     *  - Production hosts: persist a row in a `mcp_admin_confirm_tokens`
+     *    table with `hashed_token`, `scope`, `target_id`, `tenant_id`,
+     *    `expires_at`, `used_at` (nullable). The `consume` path then
+     *    holds a `lockForUpdate()` until the `used_at` write commits
+     *    in the same `DB::transaction` as the business action — that
+     *    is the R21 single-source-of-truth.
+     *
+     * The host MUST NOT throw on duplicate mint of the SAME token
+     * value (the controller never reuses tokens for different mints,
+     * so duplicates indicate a retry the host should idempotently
+     * absorb).
+     */
+    public function mintConfirmToken(\Padosoft\AskMyDocsMcpPack\Support\McpAdminConfirmToken $token): void;
+
+    /**
+     * v1.5.0 W1.C iter-1 — atomic single-use consume of a confirm token.
+     *
+     * **R21 (security-invariants-atomic-or-absent)** — this method
+     * MUST run the lock + check + mark-used sequence inside a SINGLE
+     * `DB::transaction` closure with `lockForUpdate()` held until the
+     * `used_at` write commits. Anything less opens a TOCTOU race where
+     * two concurrent presents of the same token would both pass the
+     * "unused?" check. The reference pattern:
+     *
+     * ```php
+     * DB::transaction(function () use ($token, $scope, $targetId, $tenantId): void {
+     *     $row = ConfirmToken::where('hashed_token', hash('sha256', $token))
+     *         ->lockForUpdate()
+     *         ->first();
+     *     if (!$row || $row->used_at !== null
+     *         || $row->scope !== $scope
+     *         || $row->target_id !== $targetId
+     *         || $row->tenant_id !== $tenantId
+     *         || $row->expires_at < now()) {
+     *         throw InvalidConfirmTokenException::forForged($token, $scope);
+     *     }
+     *     $row->update(['used_at' => now()]);
+     * });
+     * ```
+     *
+     * Throws {@see \Padosoft\AskMyDocsMcpPack\Exceptions\InvalidConfirmTokenException}
+     * on any failure (forged, expired, scope/target/tenant mismatch,
+     * already-consumed). The admin controllers catch that exception
+     * and map it to HTTP 422 `confirmation_invalid`.
+     *
+     * The default trait impl uses `Cache::pull` (atomic remove +
+     * fetch) — race-free on Redis but not on file/array caches; hosts
+     * SHOULD override with the DB-backed pattern above for production
+     * deployments.
+     *
+     * Tenant binding rule: a token minted with a concrete tenant MUST
+     * be consumed under that same tenant. A token minted with `null`
+     * MUST be consumed under `null`. No `null ↔ non-null` transitions
+     * — that would let an actor whose tenant context was momentarily
+     * lost (mid-flight middleware change) consume a token they should
+     * not have access to.
+     */
+    public function consumeConfirmToken(string $token, string $scope, string $targetId, ?string $tenantId): void;
 }
