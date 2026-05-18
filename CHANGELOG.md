@@ -89,9 +89,122 @@ graceful degraded state instead of a generic 500.
 
 42 new tests across 7 files; new total: 158 (was 116).
 
+### v1.5.0 — REST surface extension (W1.B — Servers CRUD + ToolsController)
+
+W1.B extends the v1.4 read-mostly REST surface with the write-side
+endpoints the SPA's Servers tab consumes, plus the cross-server
+`GET /tools` flat aggregator. The wire shape mirrors the
+`Downloads/askmydocs-mcp-pack-web-panel/project/data.js` reference
+data model.
+
+#### Added — `McpServerMutableRegistryContract` sub-interface
+
+The base `McpServerRegistryContract` is unchanged (BC). The new
+`McpServerMutableRegistryContract` extends it with four optional
+methods that the v1.5 admin write paths consume:
+
+- `paginate(?string $tenantId, array $filters, int $page, int $perPage): McpServerPage`
+  — filter+slice view for the admin table; filters `q`, `status`,
+  `transport`, `enabled`.
+- `create(array $attributes): McpServerContract` — host owns id
+  minting + uniqueness. The controller injects the trusted
+  `tenant_id` (R30) before delegating.
+- `update(string $id, array $attributes): McpServerContract` —
+  in-place patch. The controller pre-checks tenant boundary
+  (defence in depth).
+- `delete(string $id): bool` — idempotent. The controller wraps the
+  call in a `DB::transaction` closure (R21).
+
+A `HasMutableRegistry` trait under `src/Contracts/Concerns/`
+provides safe 501-throwing defaults so existing hosts can adopt the
+sub-interface with one `use` line and override only the methods
+they actually want to expose.
+
+The service provider resolves the sub-interface contract by checking
+whether the bound `McpServerRegistryContract` already implements
+the sub-interface, otherwise falling back to the package's
+`InMemoryMcpServerRegistry` — which adopts the trait AND overrides
+`paginate()` with a working in-memory filter+slice so tests of the
+read path don't need a host. `create()` / `update()` / `delete()`
+keep throwing 501 on the in-memory registry by design.
+
+#### Added — value object: `McpServerPage`
+
+`final readonly` carrier of `array<int,McpServerContract> $data`
+plus `total / per_page / current_page / last_page`. Mirrors
+Laravel's `LengthAwarePaginator::toArray()['meta']` shape so hosts
+backing the registry with Eloquent can fill it directly. `meta()`
+helper surfaces the bag the controller serialises.
+
+#### Added — new + extended controllers
+
+- `ServersController::store(StoreServerRequest)` — `POST /servers`
+  returning 201 + `Location` header. R30: trusted tenant attribute
+  replaces wire `tenant_id` before delegation.
+- `ServersController::update(UpdateServerRequest, string $id)` —
+  `PATCH /servers/{id}`. Tenant guard upstream of the host call.
+- `ServersController::destroy(Request, string $id)` — `DELETE
+  /servers/{id}` returning 204 / 404. Wrapped in `DB::transaction`
+  per R21.
+- `ServersController::index` — extended with `?page=&per_page=&q=&
+  status=&transport=&enabled=` so pagination is reachable. When any
+  of those query params is present the controller routes through
+  `paginate()` and surfaces `meta.{total, per_page, current_page,
+  last_page, tenant_id}`. When none is present the controller keeps
+  the v1.4 `forTenant()` unpaginated read path so legacy clients
+  don't see a shape change.
+- `ToolsController::index` — `GET /tools` flat aggregator across
+  every server visible to the active tenant. Filters: `?q=&server_id=&
+  destructive=true|false`. Output: `data[]` of
+  `{server_id, server_name, name, desc, destructive, calls_24h, p50, schema}`
+  + `meta.{total, server_count, tenant_id, unreachable_servers[]}`.
+  Servers whose handshake throws `McpTransportException` are
+  skipped + recorded under `meta.unreachable_servers[]` so the SPA
+  can render a partial-data banner instead of failing the whole
+  page.
+
+#### Added — FormRequest classes under `src/Http/Admin/Requests/`
+
+- `StoreServerRequest` — `name` 1..150 matching
+  `[A-Za-z0-9._\-\s]+`, `transport` ∈ `{http, sse, stdio}`, `url`
+  required ≤ 2048, optional `description` ≤ 500 / `owner` ≤ 150 /
+  `allowed_tools[]` regex-escaped, `enabled` boolean. Control
+  characters rejected in `withValidator()` (defensive against
+  log-injection). Wire `tenant_id` accepted by the rules but
+  stripped from `payload()` so the controller can never honour it.
+- `UpdateServerRequest` — all fields optional (PATCH semantics);
+  same R19 escape gates as `StoreServerRequest`. Crucially,
+  `tenant_id` on the wire returns 422 — preventing cross-tenant
+  re-parenting via UPDATE.
+
+#### Added — config flags (default `true`)
+
+- `mcp-pack.admin.features.servers_write` /
+  `MCP_PACK_ADMIN_FEATURE_SERVERS_WRITE`
+- `mcp-pack.admin.features.tools` / `MCP_PACK_ADMIN_FEATURE_TOOLS`
+
+Routes are registered UNCONDITIONALLY; the feature check happens
+inside the controller via `ResolvesAdminContext::featureGate()` and
+returns HTTP 403 `feature_disabled` so the SPA can distinguish
+"operator turned section off" from "route does not exist on this
+package version".
+
+#### Tests
+
+48 new tests across 5 files; new total: 209 (was 161).
+
+- `McpServerPageTest` — 5 cases (slice arithmetic, edge cases)
+- `HasMutableRegistryTraitTest` — 4 cases (501 default per method)
+- `InMemoryRegistryTest` — 7 new pagination cases
+- `ServersControllerTest` — 21 new write-path + pagination cases
+  (R30 trusted-tenant injection, 422 on wire `tenant_id`, 403
+  cross-tenant, 404 missing, 501 unwired, 403 feature flag)
+- `ToolsControllerTest` — 9 cases (flat aggregation, dedupe,
+  destructive filter, q-filter, server_id filter, allowed_tools
+  honoured, unreachable-servers meta)
+
 #### Sub-waves not yet shipped
 
-- W1.B — Servers CRUD + `GET /tools` + paginated registry.
 - W1.C — Audit drilldown + replay + breaker reset (atomic R21).
 - W1.D — Resources + Prompts + SSE + OpenAPI + `v1.5.0` tag.
 

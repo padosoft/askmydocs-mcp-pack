@@ -12,10 +12,12 @@ use Padosoft\AskMyDocsMcpPack\Console\McpServeCommand;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeIdentityContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerExposureContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpServerMutableRegistryContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerRegistryContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpToolAuthorizerContract;
 use Padosoft\AskMyDocsMcpPack\Defaults\InMemoryMcpServerRegistry;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpHostBridge;
+use Padosoft\AskMyDocsMcpPack\Defaults\ReadOnlyMutableRegistryAdapter;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpServerExposure;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpToolAuthorizer;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\ApiKeysController;
@@ -24,6 +26,7 @@ use Padosoft\AskMyDocsMcpPack\Http\Admin\CircuitBreakerController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\MeController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\ServersController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\TenantsController;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\ToolsController;
 use Padosoft\AskMyDocsMcpPack\Http\McpServerHttpController;
 use Padosoft\AskMyDocsMcpPack\Resilience\CircuitBreaker;
 use Padosoft\AskMyDocsMcpPack\Resilience\ResilienceMediator;
@@ -58,6 +61,31 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
                 return $bridge;
             }
             return $app->make(NullMcpHostBridge::class);
+        });
+
+        // v1.5.0 — admin REST extension W1.B. Same trick as the
+        // identity contract: when the host bound `McpServerRegistryContract`
+        // to an implementation that ALSO implements
+        // `McpServerMutableRegistryContract`, expose it directly.
+        // Otherwise fall back to the package's `InMemoryMcpServerRegistry`
+        // (which adopts the mutable sub-interface via the
+        // `HasMutableRegistry` trait — `create/update/delete` throw
+        // `HostFeatureNotImplementedException`, translated to HTTP 501
+        // by the controllers; `paginate` actually works in-memory).
+        $this->app->singleton(McpServerMutableRegistryContract::class, function ($app) {
+            $registry = $app->make(McpServerRegistryContract::class);
+            if ($registry instanceof McpServerMutableRegistryContract) {
+                return $registry;
+            }
+            // Iter-1 fix: the previous fallback created a FRESH empty
+            // in-memory registry, silently dropping the host's actual
+            // server catalog on paginated reads. Wrap the host's read
+            // registry in a read-only adapter that delegates
+            // `forTenant()` / `find()` to it, exposes a working
+            // `paginate()` over the same data, and throws 501 on
+            // `create/update/delete`. The SPA's read table works for
+            // free; writes get the documented HTTP 501 envelope.
+            return new ReadOnlyMutableRegistryAdapter($registry);
         });
 
         $this->app->singleton(JsonRpcRequestHandler::class, function ($app) {
@@ -151,6 +179,28 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
             Route::get('servers/{id}', [ServersController::class, 'show'])->name('mcp-pack.admin.servers.show');
             Route::post('servers/{id}/handshake', [ServersController::class, 'handshake'])->name('mcp-pack.admin.servers.handshake');
             Route::get('servers/{id}/tools', [ServersController::class, 'tools'])->name('mcp-pack.admin.servers.tools');
+
+            // v1.5.0 — W1.B Servers CRUD + flat ToolsController.
+            // Registered UNCONDITIONALLY (same pattern as W1.A); the
+            // per-feature flag (`servers_write` / `tools`) is checked
+            // INSIDE the controller via `ResolvesAdminContext::featureGate()`
+            // and answers HTTP 403 `feature_disabled` so the SPA can
+            // distinguish "operator disabled this section" from
+            // "route does not exist on this package version".
+            //
+            // The `{id}` regex matches the v1.4 W1.A api-keys pattern
+            // exactly: `[A-Za-z0-9._\-]+`. `%` / `*` / whitespace /
+            // path separators are blocked. The host owns the real
+            // lookup so wildcard chars cannot reach a SQL LIKE.
+            Route::post('servers', [ServersController::class, 'store'])->name('mcp-pack.admin.servers.store');
+            Route::patch('servers/{id}', [ServersController::class, 'update'])
+                ->where('id', '[A-Za-z0-9._\-]+')
+                ->name('mcp-pack.admin.servers.update');
+            Route::delete('servers/{id}', [ServersController::class, 'destroy'])
+                ->where('id', '[A-Za-z0-9._\-]+')
+                ->name('mcp-pack.admin.servers.destroy');
+            Route::get('tools', [ToolsController::class, 'index'])->name('mcp-pack.admin.tools.index');
+
             Route::get('audit', AuditController::class)->name('mcp-pack.admin.audit');
             Route::get('circuit-breaker', CircuitBreakerController::class)->name('mcp-pack.admin.circuit-breaker');
 

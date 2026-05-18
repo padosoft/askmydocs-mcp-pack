@@ -141,17 +141,26 @@ return [
         | hot-flipping the flag at runtime works without rebooting
         | the workers.
         |
-        |   - `me`        — `GET /me`, `POST /me/preferences`
-        |   - `tenants`   — `GET /tenants`
-        |   - `api_keys`  — `GET/POST/DELETE /api-keys`
+        |   - `me`             — `GET /me`, `POST /me/preferences`
+        |   - `tenants`        — `GET /tenants`
+        |   - `api_keys`       — `GET/POST/DELETE /api-keys`
+        |   - `servers_write`  — `POST/PATCH/DELETE /servers/...`
+        |                        (v1.5.0 W1.B — gates the CRUD writes;
+        |                        the read paths under `/servers` stay
+        |                        always-on)
+        |   - `tools`          — `GET /tools` (v1.5.0 W1.B — flat
+        |                        aggregator across every visible
+        |                        server)
         |
-        | W1.B / W1.C / W1.D add more keys (servers_write, replay,
-        | breaker_reset, resources, prompts, events, openapi).
+        | W1.C / W1.D add more keys (replay, breaker_reset, resources,
+        | prompts, events, openapi).
         */
         'features' => [
             'me' => env('MCP_PACK_ADMIN_FEATURE_ME', true),
             'tenants' => env('MCP_PACK_ADMIN_FEATURE_TENANTS', true),
             'api_keys' => env('MCP_PACK_ADMIN_FEATURE_API_KEYS', true),
+            'servers_write' => env('MCP_PACK_ADMIN_FEATURE_SERVERS_WRITE', true),
+            'tools' => env('MCP_PACK_ADMIN_FEATURE_TOOLS', true),
         ],
     ],
 

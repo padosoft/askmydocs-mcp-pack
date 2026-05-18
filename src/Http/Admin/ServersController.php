@@ -4,17 +4,27 @@ namespace Padosoft\AskMyDocsMcpPack\Http\Admin;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpServerMutableRegistryContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerRegistryContract;
+use Padosoft\AskMyDocsMcpPack\Exceptions\McpServerNotFoundException;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpTransportException;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\Concerns\ResolvesAdminContext;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\StoreServerRequest;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\UpdateServerRequest;
 use Padosoft\AskMyDocsMcpPack\Services\McpHandshakeService;
+use Padosoft\AskMyDocsMcpPack\Support\McpServerPage;
 
 /**
  * v1.4.0 — admin REST surface for MCP server management.
  *
- * Read-only resource view + handshake trigger over the host-supplied
- * {@see McpServerRegistryContract}. Writes (create / update / delete)
- * are deferred to v1.5.0 once a writable registry contract is added.
+ * v1.5.0 — extended with `store()` / `update()` / `destroy()` write
+ * paths consuming the new {@see McpServerMutableRegistryContract}
+ * sub-interface. The read paths (`index` / `show` / `handshake` /
+ * `tools`) keep accepting the base read-only contract so a host on
+ * a pre-v1.5 registry still gets a working read surface — writes
+ * answer HTTP 501 via the trait default.
  *
  * Auth is intentionally NOT enforced here — the package's admin route
  * group wraps this controller with whatever middleware stack the host
@@ -26,14 +36,50 @@ use Padosoft\AskMyDocsMcpPack\Services\McpHandshakeService;
  */
 final class ServersController
 {
+    use ResolvesAdminContext;
+
     public function __construct(
         private readonly McpServerRegistryContract $registry,
+        private readonly McpServerMutableRegistryContract $mutableRegistry,
         private readonly McpHandshakeService $handshake,
     ) {}
 
     public function index(Request $request): JsonResponse
     {
         $tenantId = $this->resolveTenantId($request);
+
+        // v1.5.0 — when `?page` / `?per_page` / `?q` / `?status` /
+        // `?transport` / `?enabled` are present, route through the
+        // mutable registry's `paginate()`. Otherwise fall back to the
+        // v1.4 `forTenant()` read path so legacy clients keep their
+        // unpaginated shape. The mutable registry's `paginate()`
+        // throws `HostFeatureNotImplementedException` when the host
+        // has not implemented it — we translate to 501 via
+        // `withHostBridge()`.
+        if ($this->hasPaginationFilters($request)) {
+            return $this->withHostBridge(function () use ($request, $tenantId): JsonResponse {
+                /** @var array<string,mixed> $filters */
+                $filters = $this->parseFilters($request);
+                $page = max(1, (int) $request->query('page', 1));
+                $perPage = max(1, min(200, (int) $request->query('per_page', 50)));
+
+                $result = $this->mutableRegistry->paginate(
+                    tenantId: $tenantId,
+                    filters: $filters,
+                    page: $page,
+                    perPage: $perPage,
+                );
+
+                return new JsonResponse([
+                    'data' => array_map(
+                        fn(McpServerContract $s): array => $this->resourceShape($s),
+                        $result->data,
+                    ),
+                    'meta' => $result->meta() + ['tenant_id' => $tenantId],
+                ]);
+            });
+        }
+
         $servers = $this->registry->forTenant($tenantId);
 
         return new JsonResponse([
@@ -131,6 +177,131 @@ final class ServersController
         ]);
     }
 
+    /**
+     * v1.5.0 — `POST /servers`. The trusted tenant attribute replaces
+     * any wire-supplied `tenant_id` (R30); the host receives
+     * `attributes['tenant_id']` already-bound to the active tenant.
+     */
+    public function store(StoreServerRequest $request): JsonResponse
+    {
+        $blocked = $this->featureGate('servers_write');
+        if ($blocked !== null) {
+            return $blocked;
+        }
+
+        return $this->withHostBridge(function () use ($request): JsonResponse {
+            $tenantId = $this->resolveTenantId($request);
+
+            $attrs = $request->payload();
+            // R30: the controller binds `tenant_id` from the trusted
+            // attribute, NEVER from the wire body. `StoreServerRequest::payload()`
+            // strips wire `tenant_id` before we get here, so this line
+            // is the SOLE source of truth.
+            $attrs['tenant_id'] = $tenantId;
+
+            $server = $this->mutableRegistry->create($attrs);
+
+            // Iter-1 fix: Location header builds via the named route
+            // so a host that configured `mcp-pack.admin.prefix` to a
+            // non-default value gets a correct URL. `route()` returns
+            // absolute by default, matching the Laravel convention.
+            $location = route('mcp-pack.admin.servers.show', ['id' => $server->id()]);
+
+            return (new JsonResponse(
+                ['data' => $this->resourceShape($server)],
+                201,
+            ))->header('Location', $location);
+        });
+    }
+
+    /**
+     * v1.5.0 — `PATCH /servers/{id}`. Tenant guard (defence in depth):
+     * the controller verifies the EXISTING row belongs to the active
+     * tenant before delegating to the host; cross-tenant 403s never
+     * reach the host.
+     */
+    public function update(UpdateServerRequest $request, string $id): JsonResponse
+    {
+        $blocked = $this->featureGate('servers_write');
+        if ($blocked !== null) {
+            return $blocked;
+        }
+
+        // Iter-1 fix: use the new tenant-scoped lookup that
+        //  (a) walks `forTenant()` first so id reuse across tenants
+        //      cannot return another tenant's row,
+        //  (b) includes disabled servers so operators can flip
+        //      `enabled=false` → `true` without hitting a stale 404.
+        $tenantId = $this->resolveTenantId($request);
+        $existing = $this->mutableRegistry->findForActiveTenant($tenantId, $id, includeDisabled: true);
+        if ($existing === null) {
+            return $this->notFound("Server [{$id}] not found.");
+        }
+
+        // R30 belt-and-braces: a host registry that ignored `tenantId`
+        // in `findForActiveTenant` would still surface a foreign row.
+        // The check below catches it before delegating to the host's
+        // mutable registry.
+        if ($existing->tenantId() !== null && $existing->tenantId() !== $tenantId) {
+            return $this->forbidden(
+                "Server [{$id}] belongs to a different tenant. Cross-tenant updates are forbidden.",
+            );
+        }
+
+        return $this->withHostBridge(function () use ($request, $id, $tenantId): JsonResponse {
+            try {
+                $server = $this->mutableRegistry->update($id, $request->payload());
+            } catch (McpServerNotFoundException $e) {
+                // Race between the pre-check and the mutable write
+                // (concurrent delete) — surface as the documented 404
+                // envelope, never a 500.
+                return $this->notFound($e->getMessage());
+            }
+            return new JsonResponse(['data' => $this->resourceShape($server)]);
+        });
+    }
+
+    /**
+     * v1.5.0 — `DELETE /servers/{id}`. Atomic per R21: the delete
+     * fires inside a `DB::transaction` closure even though the
+     * in-memory registry doesn't need it — sets the contract for
+     * real-impl hosts (SQL stores get a single-statement commit /
+     * rollback boundary).
+     */
+    public function destroy(Request $request, string $id): JsonResponse
+    {
+        $blocked = $this->featureGate('servers_write');
+        if ($blocked !== null) {
+            return $blocked;
+        }
+
+        // Iter-1 fix: tenant-scoped lookup (same as `update`) so id
+        // reuse + disabled rows behave correctly.
+        $tenantId = $this->resolveTenantId($request);
+        $existing = $this->mutableRegistry->findForActiveTenant($tenantId, $id, includeDisabled: true);
+        if ($existing === null) {
+            return $this->notFound("Server [{$id}] not found.");
+        }
+
+        if ($existing->tenantId() !== null && $existing->tenantId() !== $tenantId) {
+            return $this->forbidden(
+                "Server [{$id}] belongs to a different tenant. Cross-tenant deletes are forbidden.",
+            );
+        }
+
+        return $this->withHostBridge(function () use ($id): JsonResponse {
+            try {
+                $deleted = DB::transaction(fn(): bool => $this->mutableRegistry->delete($id));
+            } catch (McpServerNotFoundException $e) {
+                return $this->notFound($e->getMessage());
+            }
+            if (! $deleted) {
+                return $this->notFound("Server [{$id}] not found.");
+            }
+            return new JsonResponse(null, 204);
+        });
+    }
+
     /** @return array<string,mixed> */
     private function resourceShape(McpServerContract $server): array
     {
@@ -144,20 +315,28 @@ final class ServersController
         ];
     }
 
-    private function resolveTenantId(Request $request): ?string
+    private function hasPaginationFilters(Request $request): bool
     {
-        // R30: trusted middleware attribute only, never a client header.
-        $trustedAttribute = $request->attributes->get('mcp_pack.tenant_id');
-        if (is_string($trustedAttribute) && $trustedAttribute !== '') {
-            return $trustedAttribute;
+        foreach (['page', 'per_page', 'q', 'status', 'transport', 'enabled'] as $key) {
+            if ($request->query($key) !== null) {
+                return true;
+            }
         }
+        return false;
+    }
 
-        $user = $request->user();
-        if ($user === null) {
-            return null;
-        }
-        $tenant = data_get($user, 'tenant_id');
-        return is_string($tenant) && $tenant !== '' ? $tenant : null;
+    /** @return array<string,mixed> */
+    private function parseFilters(Request $request): array
+    {
+        return array_filter(
+            [
+                'q' => $request->query('q'),
+                'status' => $request->query('status'),
+                'transport' => $request->query('transport'),
+                'enabled' => $request->query('enabled'),
+            ],
+            static fn($v): bool => $v !== null && $v !== '',
+        );
     }
 
     /**
@@ -185,5 +364,12 @@ final class ServersController
         return new JsonResponse([
             'error' => ['code' => 'not_found', 'message' => $message],
         ], 404);
+    }
+
+    private function forbidden(string $message): JsonResponse
+    {
+        return new JsonResponse([
+            'error' => ['code' => 'tenant_forbidden', 'message' => $message],
+        ], 403);
     }
 }
