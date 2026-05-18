@@ -176,6 +176,29 @@ return [
             'audit_show' => env('MCP_PACK_ADMIN_FEATURE_AUDIT_SHOW', true),
             'audit_replay' => env('MCP_PACK_ADMIN_FEATURE_AUDIT_REPLAY', true),
             'breaker_reset' => env('MCP_PACK_ADMIN_FEATURE_BREAKER_RESET', true),
+
+            /*
+            | v1.5.0 W1.D — Resources / Prompts / SSE / OpenAPI.
+            | All four gate-flags default to `true`; flipping to
+            | `false` returns HTTP 403 `feature_disabled` so the SPA
+            | hides the section without the route disappearing.
+            */
+            'resources' => env('MCP_PACK_ADMIN_FEATURE_RESOURCES', true),
+            'prompts' => env('MCP_PACK_ADMIN_FEATURE_PROMPTS', true),
+            'events_sse' => env('MCP_PACK_ADMIN_FEATURE_EVENTS_SSE', true),
+            'openapi' => env('MCP_PACK_ADMIN_FEATURE_OPENAPI', true),
+        ],
+
+        /*
+        | v1.5.0 W1.D — Server-Sent-Events stream knobs. The
+        | controller polls `recentAudit()` at `poll_ms` cadence and
+        | caps each connection at `max_seconds` so a hung client
+        | cannot starve PHP-FPM workers forever. Defaults: 1s poll,
+        | 5min connection lifetime.
+        */
+        'sse' => [
+            'poll_ms' => (int) env('MCP_PACK_ADMIN_SSE_POLL_MS', 1000),
+            'max_seconds' => (int) env('MCP_PACK_ADMIN_SSE_MAX_SECONDS', 300),
         ],
     ],
 

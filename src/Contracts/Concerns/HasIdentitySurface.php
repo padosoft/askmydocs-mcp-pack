@@ -182,4 +182,46 @@ trait HasIdentitySurface
     {
         return "mcp-pack.confirm-token:{$scope}:{$targetId}:{$token}";
     }
+
+    // ----- v1.5.0 W1.D — resources / prompts / SSE defaults -----------
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    public function listResources(string $serverId, ?string $tenantId = null): array
+    {
+        throw HostFeatureNotImplementedException::forFeature('listResources');
+    }
+
+    /**
+     * @return array<string,mixed>|null
+     */
+    public function resourceContent(string $serverId, string $uri, ?string $tenantId = null): ?array
+    {
+        throw HostFeatureNotImplementedException::forFeature('resourceContent');
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    public function listPrompts(string $serverId, ?string $tenantId = null): array
+    {
+        throw HostFeatureNotImplementedException::forFeature('listPrompts');
+    }
+
+    /**
+     * @return array<string,mixed>|null
+     */
+    public function promptDetail(string $serverId, string $name, ?string $tenantId = null): ?array
+    {
+        throw HostFeatureNotImplementedException::forFeature('promptDetail');
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    public function recentAudit(int|string|null $sinceId = null, ?string $tenantId = null): array
+    {
+        throw HostFeatureNotImplementedException::forFeature('recentAudit');
+    }
 }

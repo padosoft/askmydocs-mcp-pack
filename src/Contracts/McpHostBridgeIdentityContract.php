@@ -240,4 +240,91 @@ interface McpHostBridgeIdentityContract extends McpHostBridgeContract
      * not have access to.
      */
     public function consumeConfirmToken(string $token, string $scope, string $targetId, ?string $tenantId): void;
+
+    /**
+     * v1.5.0 W1.D — list the resource tree exposed by a server.
+     *
+     * Returned shape mirrors the SPA `RESOURCES` fixture in `data.js`:
+     * `array<int, {uri:string, name:string, type:'dir'|'file',
+     *              mime?:string, size?:int, parent?:string}>`.
+     *
+     * R30: when `$tenantId !== null`, the host MUST filter rows so
+     * only resources visible to that tenant are returned. The
+     * controller passes the trusted tenant id from the
+     * `mcp_pack.tenant_id` middleware attribute. A non-existent or
+     * cross-tenant `$serverId` MUST surface as an empty list when
+     * the server lookup itself is tenant-scoped, OR be normalised to
+     * `[]` by the host before reaching the controller — there is no
+     * partial-leak path.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function listResources(string $serverId, ?string $tenantId = null): array;
+
+    /**
+     * v1.5.0 W1.D — fetch a single resource's content by URI.
+     *
+     * Returned shape mirrors the SPA `RESOURCE_CONTENT` fixture:
+     * `{uri, name, mime, size, content}` where `content` is either
+     * `string` (text/plain rendering) or a base64-encoded payload
+     * (for binary resources). Returns `null` when the resource does
+     * not exist OR is not visible to the active tenant — the caller
+     * MUST NOT distinguish the two (404 in both, per R30).
+     *
+     * The controller is responsible for URL-decoding the URI path
+     * segment exactly once before passing it here; the host receives
+     * the decoded string and is responsible for any SQL / filesystem
+     * escaping it might need internally (R19).
+     *
+     * @return array<string,mixed>|null
+     */
+    public function resourceContent(string $serverId, string $uri, ?string $tenantId = null): ?array;
+
+    /**
+     * v1.5.0 W1.D — list the prompts exposed by a server.
+     *
+     * Returned shape mirrors the SPA `PROMPTS` fixture in `data.js`:
+     * `array<int, {name:string, desc?:string,
+     *              args:array<int,array<string,mixed>>,
+     *              preview:array<int,array<string,mixed>>}>`.
+     *
+     * R30: same tenant-scoping rule as {@see listResources()}.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function listPrompts(string $serverId, ?string $tenantId = null): array;
+
+    /**
+     * v1.5.0 W1.D — fetch a single prompt's detail by name.
+     *
+     * Returns `null` when the prompt does not exist OR is not
+     * visible to the active tenant — the caller MUST NOT distinguish
+     * the two (R30).
+     *
+     * @return array<string,mixed>|null
+     */
+    public function promptDetail(string $serverId, string $name, ?string $tenantId = null): ?array;
+
+    /**
+     * v1.5.0 W1.D — return audit rows newer than `$sinceId` for the
+     * Server-Sent-Events stream consumed by the SPA's live timeline.
+     *
+     * `$sinceId === null` means "no cursor yet" — typically the first
+     * poll on a fresh connection. The host MAY interpret this as
+     * "return the most recent N rows" (so the SPA shows recent
+     * activity at connect time) OR "return [] until the next row
+     * arrives" (so the SPA only sees forward motion). Either policy
+     * is acceptable; the controller does not introspect.
+     *
+     * Returned shape mirrors the SPA `AUDIT` fixture row plus an
+     * explicit `id` so the controller can advance its cursor:
+     * `array<int, {id:int|string, ts:int|string, server_id:string,
+     *              tool:string, status:int|string,
+     *              dur:int, actor:string}>`.
+     *
+     * R30: same tenant-scoping rule as {@see listResources()}.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function recentAudit(int|string|null $sinceId = null, ?string $tenantId = null): array;
 }

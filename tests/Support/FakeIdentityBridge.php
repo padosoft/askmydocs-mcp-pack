@@ -240,4 +240,132 @@ final class FakeIdentityBridge implements McpHostBridgeContract, McpHostBridgeId
         // the same token then hits the `used_at !== null` branch above.
         $this->mintedTokens[$token]['used_at'] = time();
     }
+
+    // ----- v1.5.0 W1.D — resources / prompts / SSE ---------------------
+
+    /** @var array<string,array<int,array<string,mixed>>> keyed by server_id */
+    public array $resources = [];
+
+    /** @var array<string,?string> map of server_id → owning tenant id */
+    public array $resourceTenants = [];
+
+    /** @var array<string,array<string,array<string,mixed>>> keyed by [server_id][uri] */
+    public array $resourceContents = [];
+
+    /** @var array<int,array{0:string,1:?string}> calls to `listResources` */
+    public array $listResourcesCalls = [];
+
+    /** @var array<int,array{0:string,1:string,2:?string}> calls to `resourceContent` */
+    public array $resourceContentCalls = [];
+
+    /** @var array<string,array<int,array<string,mixed>>> keyed by server_id */
+    public array $prompts = [];
+
+    /** @var array<string,?string> map of server_id → owning tenant id (prompts) */
+    public array $promptTenants = [];
+
+    /** @var array<string,array<string,array<string,mixed>>> keyed by [server_id][prompt_name] */
+    public array $promptDetails = [];
+
+    /** @var array<int,array{0:string,1:?string}> calls to `listPrompts` */
+    public array $listPromptsCalls = [];
+
+    /** @var array<int,array{0:string,1:string,2:?string}> calls to `promptDetail` */
+    public array $promptDetailCalls = [];
+
+    /** @var array<int,array{0:int|string|null,1:?string}> calls to `recentAudit` */
+    public array $recentAuditCalls = [];
+
+    /** @var array<int,array<string,mixed>>|null */
+    public ?array $recentAuditRows = null;
+
+    public function listResources(string $serverId, ?string $tenantId = null): array
+    {
+        $this->listResourcesCalls[] = [$serverId, $tenantId];
+        if ($this->forceNotImplemented) {
+            throw HostFeatureNotImplementedException::forFeature('listResources');
+        }
+        if (! isset($this->resources[$serverId])) {
+            return [];
+        }
+        $owningTenant = $this->resourceTenants[$serverId] ?? null;
+        if ($tenantId !== null && $owningTenant !== null && $owningTenant !== $tenantId) {
+            // R30: cross-tenant — surface as empty (caller turns this
+            // into 404 / empty list with no leakage).
+            return [];
+        }
+        return $this->resources[$serverId];
+    }
+
+    public function resourceContent(string $serverId, string $uri, ?string $tenantId = null): ?array
+    {
+        $this->resourceContentCalls[] = [$serverId, $uri, $tenantId];
+        if ($this->forceNotImplemented) {
+            throw HostFeatureNotImplementedException::forFeature('resourceContent');
+        }
+        if (! isset($this->resourceContents[$serverId][$uri])) {
+            return null;
+        }
+        $owningTenant = $this->resourceTenants[$serverId] ?? null;
+        if ($tenantId !== null && $owningTenant !== null && $owningTenant !== $tenantId) {
+            return null;
+        }
+        return $this->resourceContents[$serverId][$uri];
+    }
+
+    public function listPrompts(string $serverId, ?string $tenantId = null): array
+    {
+        $this->listPromptsCalls[] = [$serverId, $tenantId];
+        if ($this->forceNotImplemented) {
+            throw HostFeatureNotImplementedException::forFeature('listPrompts');
+        }
+        if (! isset($this->prompts[$serverId])) {
+            return [];
+        }
+        $owningTenant = $this->promptTenants[$serverId] ?? null;
+        if ($tenantId !== null && $owningTenant !== null && $owningTenant !== $tenantId) {
+            return [];
+        }
+        return $this->prompts[$serverId];
+    }
+
+    public function promptDetail(string $serverId, string $name, ?string $tenantId = null): ?array
+    {
+        $this->promptDetailCalls[] = [$serverId, $name, $tenantId];
+        if ($this->forceNotImplemented) {
+            throw HostFeatureNotImplementedException::forFeature('promptDetail');
+        }
+        if (! isset($this->promptDetails[$serverId][$name])) {
+            return null;
+        }
+        $owningTenant = $this->promptTenants[$serverId] ?? null;
+        if ($tenantId !== null && $owningTenant !== null && $owningTenant !== $tenantId) {
+            return null;
+        }
+        return $this->promptDetails[$serverId][$name];
+    }
+
+    public function recentAudit(int|string|null $sinceId = null, ?string $tenantId = null): array
+    {
+        $this->recentAuditCalls[] = [$sinceId, $tenantId];
+        if ($this->forceNotImplemented) {
+            throw HostFeatureNotImplementedException::forFeature('recentAudit');
+        }
+        if ($this->recentAuditRows === null) {
+            return [];
+        }
+        // Mimic a real host: filter rows whose `id` > $sinceId when
+        // $sinceId is a numeric cursor; otherwise return all.
+        if ($sinceId === null) {
+            return $this->recentAuditRows;
+        }
+        $cursor = is_numeric($sinceId) ? (int) $sinceId : null;
+        if ($cursor === null) {
+            return $this->recentAuditRows;
+        }
+        return array_values(array_filter(
+            $this->recentAuditRows,
+            static fn(array $row): bool => isset($row['id']) && (int) $row['id'] > $cursor,
+        ));
+    }
 }
