@@ -298,12 +298,13 @@ on the first push; the 9 Copilot findings added 3 R21-pinning tests
 in the destructive-invoke flow, the rest are refactors that preserve
 count).
 
-- `ServersControllerInvokeTest` — 11 cases (happy, cross-tenant
-  404, destructive confirm flow, transport 502, 502 on
-  ToolCallResult.error, 403 not authorised, 403 feature flag,
-  route stays registered, 422 missing arguments, 422 control char,
-  422 nesting depth).
-- `AuditControllerShowReplayTest` — 14 cases (drilldown happy,
+- `ServersControllerInvokeTest` — 15 cases (happy, cross-tenant
+  404, 404 tool not in allowlist, destructive mint, destructive
+  consume, destructive 422 reuse, destructive 422 forged,
+  transport 502, 502 on ToolCallResult.error, 403 not authorised,
+  403 feature flag, route stays registered, 422 missing arguments,
+  422 control char, 422 nesting depth).
+- `AuditControllerShowReplayTest` — 16 cases (drilldown happy,
   404 missing, 404 cross-tenant, 403 feature flag, 501 unwired,
   replay mint happy, mint 404 cross-tenant, mint 404 missing,
   consume happy, consume 422 reuse, consume 422 forged, consume
