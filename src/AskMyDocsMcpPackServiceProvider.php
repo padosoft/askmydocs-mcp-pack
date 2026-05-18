@@ -267,11 +267,13 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
             // so a runtime flag flip surfaces as HTTP 403
             // `feature_disabled` (not 404).
             //
-            // The `{uri}` segment matches a SINGLE path segment
-            // (regex `[^/]+`); the SPA URL-encodes the URI before
-            // sending so `mcp%3A%2F%2Fopenai%2Fdocs%2Freadme.md`
-            // arrives as one segment. The controller `rawurldecode`s
-            // it ONCE before forwarding to the bridge (R19).
+            // The `{uri}` segment uses `.+` (NOT `[^/]+` — see the
+            // explanatory comment on the route below) so URIs that
+            // contain literal `/` (e.g. `mcp://openai/docs/readme.md`)
+            // match correctly after Symfony's router decodes the
+            // path. The controller receives the parameter ALREADY
+            // decoded by Symfony (decode-exactly-once, R19) and
+            // forwards it to the bridge as-is.
             Route::get('servers/{id}/resources', [ResourcesController::class, 'index'])
                 ->where('id', '[A-Za-z0-9._\-]+')
                 ->name('mcp-pack.admin.servers.resources.index');

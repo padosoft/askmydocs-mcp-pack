@@ -75,23 +75,25 @@ final class ResourcesController
             return $blocked;
         }
 
-        // R19: the route already provided the literal path segment.
-        // Laravel does not double-decode the parameter, so the
-        // controller decodes it ONCE — `mcp%3A%2F%2Fopenai...` →
-        // `mcp://openai...`. The bridge receives the decoded URI;
-        // host owns any further escaping inside its persistence
-        // layer.
-        $decodedUri = rawurldecode($uri);
-
+        // R19: Symfony's `UrlMatcher::matchRequest()` `rawurldecode`s
+        // the path BEFORE applying the route regex (verified in
+        // `vendor/symfony/routing/Matcher/UrlMatcher.php`). Calling
+        // `rawurldecode()` here AGAIN would double-decode: a literal
+        // `%2F` in the resource URI sent as `%252F` on the wire would
+        // arrive as `%2F` (already decoded once by Symfony), then
+        // become `/` (decoded twice) — corrupting the URI before the
+        // bridge lookup. Decode-exactly-once is the contract, so we
+        // pass the parameter through unchanged. The host's bridge
+        // owns any further escaping inside its persistence layer.
         $tenantId = $this->resolveTenantId($request);
 
-        return $this->withHostBridge(function () use ($id, $decodedUri, $tenantId): JsonResponse {
-            $row = $this->identityBridge->resourceContent($id, $decodedUri, $tenantId);
+        return $this->withHostBridge(function () use ($id, $uri, $tenantId): JsonResponse {
+            $row = $this->identityBridge->resourceContent($id, $uri, $tenantId);
             if ($row === null) {
                 return new JsonResponse([
                     'error' => [
                         'code' => 'not_found',
-                        'message' => "Resource [{$decodedUri}] not found on server [{$id}].",
+                        'message' => "Resource [{$uri}] not found on server [{$id}].",
                     ],
                 ], 404);
             }

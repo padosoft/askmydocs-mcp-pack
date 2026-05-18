@@ -235,4 +235,43 @@ class ResourcesControllerTest extends TestCase
         $lastCall = end($bridge->resourceContentCalls);
         $this->assertSame($uri, $lastCall[1]);
     }
+
+    public function test_uri_is_decoded_exactly_once(): void
+    {
+        // Iter-1 (W1.D): Symfony's router decodes path params before
+        // the controller runs, so any additional `rawurldecode()` in
+        // the controller would corrupt URIs that contain literal
+        // percent-encoded octets — a host whose URI scheme
+        // legitimately contains `%2F` would see it become `/` after a
+        // second decode (wrong row → 404).
+        //
+        // Wire test: URI `mcp://openai/%2Fweird.md` (single segment
+        // with a literal percent-encoded slash). Client sends as
+        // `mcp%3A%2F%2Fopenai%2F%252Fweird.md`. Symfony decodes ONCE →
+        // `mcp://openai/%2Fweird.md`. The controller MUST forward
+        // THAT to the bridge (not `mcp://openai//weird.md`).
+        $bridge = $this->bindBridge();
+        InjectTenantMiddleware::$tenantId = 'acme';
+
+        $expectedAfterSingleDecode = 'mcp://openai/%2Fweird.md';
+        $bridge->resourceContents['srv_01'][$expectedAfterSingleDecode] = [
+            'uri' => $expectedAfterSingleDecode,
+            'name' => 'weird.md',
+            'mime' => 'text/markdown',
+            'size' => 4,
+            'content' => 'data',
+        ];
+
+        // Wire-encoded form (URL-encoded TWICE so Symfony's
+        // single-decode produces the literal `%2F` in the middle).
+        $wirePath = 'mcp%3A%2F%2Fopenai%2F%252Fweird.md';
+
+        $this->getJson("/api/admin/mcp-pack/servers/srv_01/resources/{$wirePath}")->assertOk();
+        $lastCall = end($bridge->resourceContentCalls);
+        $this->assertSame(
+            $expectedAfterSingleDecode,
+            $lastCall[1],
+            'URI was double-decoded by the controller — the `rawurldecode()` call must be removed.',
+        );
+    }
 }
