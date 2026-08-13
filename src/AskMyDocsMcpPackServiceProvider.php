@@ -5,21 +5,37 @@ namespace Padosoft\AskMyDocsMcpPack;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
+use Padosoft\AskMyDocsMcpPack\Adapters\LaravelMcpAdapter;
+use Padosoft\AskMyDocsMcpPack\Apps\AppRenderer;
+use Padosoft\AskMyDocsMcpPack\Artifacts\FlysystemArtifactManager;
+use Padosoft\AskMyDocsMcpPack\Auth\HostAuthenticationResolver;
+use Padosoft\AskMyDocsMcpPack\Auth\NullOAuthAccessTokenValidator;
 use Padosoft\AskMyDocsMcpPack\Console\McpPingCommand;
 use Padosoft\AskMyDocsMcpPack\Console\McpServeCommand;
+use Padosoft\AskMyDocsMcpPack\Console\PruneMcpArtifactsCommand;
+use Padosoft\AskMyDocsMcpPack\Console\PruneMcpTasksCommand;
+use Padosoft\AskMyDocsMcpPack\Console\RecoverMcpTasksCommand;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpHostBridgeIdentityContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerExposureContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerMutableRegistryContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerRegistryContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpToolAuthorizerContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\V2\ArtifactManagerContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\V2\AuthenticationResolverContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\V2\CancellationRegistryContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\V2\OAuthAccessTokenValidatorContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\V2\SubscriptionBrokerContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\V2\TaskManagerContract;
 use Padosoft\AskMyDocsMcpPack\Defaults\InMemoryMcpServerRegistry;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpHostBridge;
-use Padosoft\AskMyDocsMcpPack\Defaults\ReadOnlyMutableRegistryAdapter;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpServerExposure;
 use Padosoft\AskMyDocsMcpPack\Defaults\NullMcpToolAuthorizer;
+use Padosoft\AskMyDocsMcpPack\Defaults\ReadOnlyMutableRegistryAdapter;
+use Padosoft\AskMyDocsMcpPack\Fluent\McpManager;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\ApiKeysController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\AuditController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\CircuitBreakerController;
@@ -31,25 +47,69 @@ use Padosoft\AskMyDocsMcpPack\Http\Admin\ResourcesController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\ServersController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\TenantsController;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\ToolsController;
-use Padosoft\AskMyDocsMcpPack\Http\McpServerHttpController;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\V2\AdminController as AdminV2Controller;
+use Padosoft\AskMyDocsMcpPack\Http\Admin\V2\OpenApiController as OpenApiV2Controller;
+use Padosoft\AskMyDocsMcpPack\Http\V2\ArtifactDownloadController;
+use Padosoft\AskMyDocsMcpPack\Http\V2\McpStreamableHttpController;
+use Padosoft\AskMyDocsMcpPack\Http\V2\Middleware\ValidateOAuthResourceRequest;
+use Padosoft\AskMyDocsMcpPack\Http\V2\OAuthProtectedResourceController;
+use Padosoft\AskMyDocsMcpPack\Protocol\CursorCodec;
+use Padosoft\AskMyDocsMcpPack\Protocol\HandlerInvoker;
+use Padosoft\AskMyDocsMcpPack\Protocol\RequestStateCipher;
 use Padosoft\AskMyDocsMcpPack\Resilience\CircuitBreaker;
 use Padosoft\AskMyDocsMcpPack\Resilience\ResilienceMediator;
 use Padosoft\AskMyDocsMcpPack\Resilience\RetryBudget;
 use Padosoft\AskMyDocsMcpPack\ServerSide\JsonRpcRequestHandler;
+use Padosoft\AskMyDocsMcpPack\ServerSide\V2JsonRpcRequestHandler;
+use Padosoft\AskMyDocsMcpPack\Services\McpDiscoveryService;
 use Padosoft\AskMyDocsMcpPack\Services\McpHandshakeService;
 use Padosoft\AskMyDocsMcpPack\Services\McpToolCallingService;
 use Padosoft\AskMyDocsMcpPack\Services\ToolInvoker;
+use Padosoft\AskMyDocsMcpPack\Subscriptions\CacheCancellationRegistry;
+use Padosoft\AskMyDocsMcpPack\Subscriptions\CacheSubscriptionBroker;
+use Padosoft\AskMyDocsMcpPack\Tasks\DatabaseTaskManager;
+use Padosoft\AskMyDocsMcpPack\Validation\JsonSchemaValidator;
 
 class AskMyDocsMcpPackServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        $this->mergeConfigFrom(__DIR__ . '/../config/mcp-pack.php', 'mcp-pack');
+        $this->mergeConfigFrom(__DIR__.'/../config/mcp-pack.php', 'mcp-pack');
 
         $this->app->singleton(McpHostBridgeContract::class, NullMcpHostBridge::class);
         $this->app->singleton(McpServerRegistryContract::class, InMemoryMcpServerRegistry::class);
         $this->app->singleton(McpToolAuthorizerContract::class, NullMcpToolAuthorizer::class);
         $this->app->singleton(McpServerExposureContract::class, NullMcpServerExposure::class);
+
+        $this->app->singleton(SubscriptionBrokerContract::class, function ($app) {
+            $store = config('mcp-pack.v2.cache_store');
+            $cache = $app->make(CacheFactory::class)->store(is_string($store) && $store !== '' ? $store : null);
+
+            return new CacheSubscriptionBroker($cache, (int) config('mcp-pack.subscriptions.ttl_seconds', 3600));
+        });
+        $this->app->singleton(CancellationRegistryContract::class, function ($app) {
+            $store = config('mcp-pack.v2.cache_store');
+
+            return new CacheCancellationRegistry($app->make(CacheFactory::class)->store(is_string($store) && $store !== '' ? $store : null));
+        });
+        $this->app->singleton(McpManager::class);
+        $this->app->singleton(AuthenticationResolverContract::class, HostAuthenticationResolver::class);
+        $this->app->singleton(OAuthAccessTokenValidatorContract::class, NullOAuthAccessTokenValidator::class);
+        $this->app->singleton(ArtifactManagerContract::class, FlysystemArtifactManager::class);
+        $this->app->singleton(DatabaseTaskManager::class);
+        $this->app->singleton(TaskManagerContract::class, fn ($app) => $app->make(DatabaseTaskManager::class));
+        $this->app->singleton(HandlerInvoker::class);
+        $this->app->singleton(AppRenderer::class);
+        $this->app->singleton(RequestStateCipher::class);
+        $this->app->singleton(JsonSchemaValidator::class, fn () => new JsonSchemaValidator(
+            maxSchemaBytes: (int) config('mcp-pack.validation.max_schema_bytes', 262_144),
+            maxInstanceBytes: (int) config('mcp-pack.validation.max_instance_bytes', 1_048_576),
+            maxDepth: (int) config('mcp-pack.validation.max_depth', 64),
+            allowedRemoteHosts: array_values(array_filter((array) config('mcp-pack.validation.remote_ref_hosts', []), 'is_string')),
+        ));
+        $this->app->singleton(CursorCodec::class, fn () => new CursorCodec(hash('sha256', (string) config('app.key', 'mcp-pack-v2'))));
+        $this->app->singleton(V2JsonRpcRequestHandler::class);
+        $this->app->singleton(LaravelMcpAdapter::class);
 
         // v1.5.0 — admin REST extension. The identity sub-interface is
         // resolved separately: if the host bound an `McpHostBridgeContract`
@@ -64,6 +124,7 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
             if ($bridge instanceof McpHostBridgeIdentityContract) {
                 return $bridge;
             }
+
             return $app->make(NullMcpHostBridge::class);
         });
 
@@ -81,6 +142,7 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
             if ($registry instanceof McpServerMutableRegistryContract) {
                 return $registry;
             }
+
             // Iter-1 fix: the previous fallback created a FRESH empty
             // in-memory registry, silently dropping the host's actual
             // server catalog on paginated reads. Wrap the host's read
@@ -108,14 +170,16 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
             // layers is enabled. Otherwise the invoker behaves
             // exactly as in v1.2 — bare callTool() with no wrapping.
             $mediator = ($cb || $retry) ? $app->make(ResilienceMediator::class) : null;
+
             return new ToolInvoker(resilience: $mediator);
         });
 
-        $this->app->singleton(McpHandshakeService::class, function ($app) {
-            return new McpHandshakeService(
+        $this->app->singleton(McpDiscoveryService::class, function ($app) {
+            return new McpDiscoveryService(
                 ttlSeconds: (int) config('mcp-pack.handshake.ttl_seconds', 300),
             );
         });
+        $this->app->singleton(McpHandshakeService::class, fn () => new McpHandshakeService(ttlSeconds: (int) config('mcp-pack.handshake.ttl_seconds', 300)));
 
         $this->app->singleton(McpToolCallingService::class, function ($app) {
             return new McpToolCallingService(
@@ -131,13 +195,16 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        if ((bool) config('mcp-pack.laravel_mcp.enabled', false)) {
+            $this->app->make(LaravelMcpAdapter::class)->assertCompatible();
+        }
         if ($this->app->runningInConsole()) {
             $this->publishes([
-                __DIR__ . '/../config/mcp-pack.php' => config_path('mcp-pack.php'),
+                __DIR__.'/../config/mcp-pack.php' => config_path('mcp-pack.php'),
             ], 'mcp-pack-config');
 
             $this->publishes([
-                __DIR__ . '/../database/migrations/' => database_path('migrations'),
+                __DIR__.'/../database/migrations/' => database_path('migrations'),
             ], 'mcp-pack-migrations');
 
             // v1.5.0 — opt-in identity-surface migrations (user
@@ -146,23 +213,29 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
             // dedicated tag so a host can publish ONLY the identity
             // tables without re-publishing the audit table.
             $this->publishes([
-                __DIR__ . '/../database/migrations-optional/' => database_path('migrations'),
+                __DIR__.'/../database/migrations-optional/' => database_path('migrations'),
             ], 'mcp-pack-migrations');
 
             $this->publishes([
-                __DIR__ . '/../database/migrations-optional/' => database_path('migrations'),
+                __DIR__.'/../database/migrations-optional/' => database_path('migrations'),
             ], 'mcp-pack-identity-migrations');
 
             $this->commands([
                 McpPingCommand::class,
                 McpServeCommand::class,
+                PruneMcpTasksCommand::class,
+                PruneMcpArtifactsCommand::class,
+                RecoverMcpTasksCommand::class,
             ]);
         }
 
-        $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
+        $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
 
         $this->registerServerSideHttpRoute();
         $this->registerAdminRoutes();
+        $this->registerAdminV2Routes();
+        $this->registerOAuthMetadataRoute();
+        $this->registerArtifactDownloadRoute();
     }
 
     /**
@@ -344,10 +417,11 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
         });
     }
 
-    private function resilienceCache(\Illuminate\Contracts\Foundation\Application $app): CacheRepository
+    private function resilienceCache(Application $app): CacheRepository
     {
         $store = config('mcp-pack.resilience.cache_store');
         $factory = $app->make(CacheFactory::class);
+
         return is_string($store) && $store !== ''
             ? $factory->store($store)
             : $factory->store();
@@ -367,10 +441,57 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
 
         $prefix = (string) config('mcp-pack.server_side.http.prefix', 'mcp');
         $middleware = (array) config('mcp-pack.server_side.http.middleware', ['api']);
+        if ((bool) config('mcp-pack.oauth.enabled', false)) {
+            $middleware[] = ValidateOAuthResourceRequest::class;
+        }
 
         Route::middleware($middleware)
             ->prefix($prefix)
-            ->post('/', McpServerHttpController::class)
+            ->post('/', McpStreamableHttpController::class)
+            ->defaults('mcp_server', (string) config('mcp-pack.v2.default_server', 'default'))
             ->name('mcp-pack.server.http');
+    }
+
+    private function registerOAuthMetadataRoute(): void
+    {
+        if (! (bool) config('mcp-pack.oauth.enabled', false)) {
+            return;
+        }
+        Route::middleware((array) config('mcp-pack.oauth.metadata_middleware', ['api']))
+            ->get('/.well-known/oauth-protected-resource', OAuthProtectedResourceController::class)
+            ->name('mcp-pack.v2.oauth.protected-resource');
+    }
+
+    private function registerAdminV2Routes(): void
+    {
+        if (! (bool) config('mcp-pack.admin_v2.enabled', false)) {
+            return;
+        }
+        Route::middleware((array) config('mcp-pack.admin_v2.middleware', ['api']))
+            ->prefix((string) config('mcp-pack.admin_v2.prefix', 'api/admin/mcp-pack/v2'))
+            ->group(function (): void {
+                Route::get('capabilities', [AdminV2Controller::class, 'capabilities']);
+                Route::get('apps', [AdminV2Controller::class, 'apps']);
+                Route::get('tasks', [AdminV2Controller::class, 'tasks']);
+                Route::get('tasks/{task}', [AdminV2Controller::class, 'task'])->whereUuid('task');
+                Route::post('tasks/{task}/input', [AdminV2Controller::class, 'updateTask'])->whereUuid('task');
+                Route::post('tasks/{task}/cancel', [AdminV2Controller::class, 'cancelTask'])->whereUuid('task');
+                Route::get('artifacts', [AdminV2Controller::class, 'artifacts']);
+                Route::post('artifacts', [AdminV2Controller::class, 'storeArtifact']);
+                Route::get('artifacts/{artifact}', [AdminV2Controller::class, 'artifact'])->whereUuid('artifact');
+                Route::get('artifacts/{artifact}/download', [AdminV2Controller::class, 'artifactUrl'])->whereUuid('artifact');
+                Route::delete('artifacts/{artifact}', [AdminV2Controller::class, 'deleteArtifact'])->whereUuid('artifact');
+                Route::get('openapi.json', OpenApiV2Controller::class);
+            });
+    }
+
+    private function registerArtifactDownloadRoute(): void
+    {
+        if (! (bool) config('mcp-pack.artifacts.enabled', true)) {
+            return;
+        }
+        Route::get('/mcp-pack/v2/artifacts/{artifact}/download', ArtifactDownloadController::class)
+            ->whereUuid('artifact')
+            ->name('mcp-pack.v2.artifacts.download');
     }
 }

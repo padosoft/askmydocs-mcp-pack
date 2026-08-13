@@ -5,6 +5,8 @@ namespace Padosoft\AskMyDocsMcpPack\Transports;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpTransportContract;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpTransportException;
 use Padosoft\AskMyDocsMcpPack\Support\JsonRpcMessage;
+use Symfony\Component\Process\ExecutableFinder;
+use Symfony\Component\Process\InputStream;
 use Symfony\Component\Process\Process;
 
 /**
@@ -19,29 +21,20 @@ use Symfony\Component\Process\Process;
  *   - env:     array<string,string>|null — environment variables
  *   - timeout_ms: int — per-request timeout (default 10_000)
  *
- * ## v1.0 limitation — single-shot per request
- *
- * The transport spawns a fresh child process for EACH JSON-RPC
- * request (initialize, tools/list, tools/call …) and closes stdin
- * right after the message goes out. This is correct for stateless
- * MCP servers (filesystem, public-API wrappers) but the canonical
- * MCP spec defines stdio as a persistent session where `initialize`
- * + `initialized` set up state that `tools/list` and `tools/call`
- * rely on. Stateful servers — including many official reference
- * implementations — will refuse to respond to a second message
- * because their internal state machine is back at the start.
- *
- * For v1.0 we recommend the HTTP transport for production
- * tool-calling workloads, OR subclassing this transport to keep the
- * Process open across requests. Persistent stdio sessions land in
- * v1.1 (see Roadmap in the README).
- *
- * Hosts that need persistent stdio today should subclass and
- * override {@see makeProcess()} / hold a single Process across
- * `request()` calls.
+ * The child process is persistent for the lifetime of this transport.
+ * That is required by the session-based legacy revisions and also
+ * avoids process-start overhead for independent 2026-07-28 requests.
+ * Responses are correlated by JSON-RPC id while notifications and
+ * unrelated output lines remain available to subsequent reads.
  */
 class StdioJsonRpcTransport implements McpTransportContract
 {
+    private ?Process $process = null;
+
+    private ?InputStream $input = null;
+
+    private string $buffer = '';
+
     /** @param array<string,mixed> $config */
     public function __construct(protected readonly array $config) {}
 
@@ -51,11 +44,11 @@ class StdioJsonRpcTransport implements McpTransportContract
             throw new \InvalidArgumentException('StdioJsonRpcTransport::request() requires a JSON-RPC request message.');
         }
 
-        $process = $this->makeProcess();
         try {
-            $process->setInput($request->toJson() . "\n");
-            $process->setTimeout($this->timeoutSeconds());
-            $process->run();
+            $process = $this->runningProcess();
+            $this->input?->write($request->toJson()."\n");
+
+            return $this->waitForResponse($request->id);
         } catch (\Throwable $e) {
             // Catches ProcessFailedException, ProcessTimedOutException,
             // and any other Symfony Process exception — keeps the
@@ -63,19 +56,6 @@ class StdioJsonRpcTransport implements McpTransportContract
             throw new McpTransportException("Stdio MCP transport process failed: {$e->getMessage()}", 0, $e);
         }
 
-        if (! $process->isSuccessful()) {
-            throw new McpTransportException(
-                "Stdio MCP transport process exited non-zero ({$process->getExitCode()}): "
-                . $process->getErrorOutput(),
-            );
-        }
-
-        $output = trim($process->getOutput());
-        if ($output === '') {
-            throw new McpTransportException('Stdio MCP transport produced empty output.');
-        }
-
-        return $this->parseResponseLine($output, $request->id);
     }
 
     public function notify(JsonRpcMessage $notification): void
@@ -84,21 +64,13 @@ class StdioJsonRpcTransport implements McpTransportContract
             throw new \InvalidArgumentException('StdioJsonRpcTransport::notify() requires a JSON-RPC notification.');
         }
 
-        $process = $this->makeProcess();
         try {
-            $process->setInput($notification->toJson() . "\n");
-            $process->setTimeout($this->timeoutSeconds());
-            $process->run();
+            $this->runningProcess();
+            $this->input?->write($notification->toJson()."\n");
         } catch (\Throwable $e) {
             throw new McpTransportException("Stdio MCP transport notify failed: {$e->getMessage()}", 0, $e);
         }
 
-        if (! $process->isSuccessful()) {
-            throw new McpTransportException(
-                "Stdio MCP transport notify exited non-zero ({$process->getExitCode()}): "
-                . $process->getErrorOutput(),
-            );
-        }
     }
 
     public function isHealthy(): bool
@@ -109,7 +81,8 @@ class StdioJsonRpcTransport implements McpTransportContract
         }
 
         // Cheap presence-check: does the executable exist somewhere on PATH?
-        $finder = new \Symfony\Component\Process\ExecutableFinder();
+        $finder = new ExecutableFinder;
+
         return $finder->find($command) !== null;
     }
 
@@ -118,7 +91,7 @@ class StdioJsonRpcTransport implements McpTransportContract
      * response to `$expectedId`. If multiple lines came back, prefer
      * the line whose id matches.
      */
-    private function parseResponseLine(string $output, string|int|null $expectedId): JsonRpcMessage
+    private function parseResponseLine(string $output, string|int|null $expectedId): ?JsonRpcMessage
     {
         $lines = preg_split('/\r?\n/', $output, -1, PREG_SPLIT_NO_EMPTY) ?: [];
 
@@ -140,7 +113,61 @@ class StdioJsonRpcTransport implements McpTransportContract
             }
         }
 
-        throw new McpTransportException("Stdio MCP transport: no JSON-RPC response in output: {$output}");
+        return null;
+    }
+
+    private function runningProcess(): Process
+    {
+        if ($this->process?->isRunning()) {
+            return $this->process;
+        }
+        $this->input = new InputStream;
+        $this->process = $this->makeProcess();
+        $this->process->setInput($this->input);
+        $this->process->setTimeout(null);
+        $this->process->start();
+        if (! $this->process->isRunning()) {
+            throw new McpTransportException('Stdio MCP transport process did not start.');
+        }
+
+        return $this->process;
+    }
+
+    private function waitForResponse(string|int|null $expectedId): JsonRpcMessage
+    {
+        $deadline = microtime(true) + $this->timeoutSeconds();
+        do {
+            $this->buffer .= $this->process?->getIncrementalOutput() ?? '';
+            $lines = preg_split('/\r?\n/', $this->buffer) ?: [];
+            $this->buffer = array_pop($lines) ?? '';
+            foreach ($lines as $line) {
+                $response = $this->parseResponseLine($line, $expectedId);
+                if ($response !== null && $response->id === $expectedId) {
+                    return $response;
+                }
+            }
+            if (! $this->process?->isRunning()) {
+                throw new McpTransportException('Stdio MCP transport exited before responding: '.($this->process?->getErrorOutput() ?? ''));
+            }
+            usleep(10_000);
+        } while (microtime(true) < $deadline);
+        throw new McpTransportException('Stdio MCP transport timed out waiting for a matching response.');
+    }
+
+    public function close(): void
+    {
+        $this->input?->close();
+        if ($this->process?->isRunning()) {
+            $this->process->stop(1);
+        }
+        $this->process = null;
+        $this->input = null;
+        $this->buffer = '';
+    }
+
+    public function __destruct()
+    {
+        $this->close();
     }
 
     protected function makeProcess(): Process
@@ -171,6 +198,7 @@ class StdioJsonRpcTransport implements McpTransportContract
     private function timeoutSeconds(): float
     {
         $ms = (int) ($this->config['timeout_ms'] ?? 10_000);
+
         return max(0.5, $ms / 1000);
     }
 }

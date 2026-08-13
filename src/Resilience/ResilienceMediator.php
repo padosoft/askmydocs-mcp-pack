@@ -77,8 +77,10 @@ final class ResilienceMediator
      * Run the callable under the resilience policy.
      *
      * @template T
-     * @param callable(): T $call
+     *
+     * @param  callable(): T  $call
      * @return T
+     *
      * @throws McpTransportException
      */
     public function execute(
@@ -86,6 +88,7 @@ final class ResilienceMediator
         string $serverId,
         string $toolName,
         callable $call,
+        bool $retryable = true,
     ): mixed {
         if ($this->breakerEnabled && ! $this->breaker->allowsCall($serverId, $toolName)) {
             throw new CircuitOpenException(
@@ -99,7 +102,7 @@ final class ResilienceMediator
         // When retries are disabled the loop runs exactly once and the
         // first transport failure is re-thrown — no token consumption,
         // no RetryAttempted events, no sleep.
-        $effectiveMaxAttempts = $this->retryEnabled ? $this->maxAttempts : 1;
+        $effectiveMaxAttempts = $this->retryEnabled && $retryable ? $this->maxAttempts : 1;
         $attempts = 0;
         $lastError = null;
 
@@ -120,6 +123,7 @@ final class ResilienceMediator
                 if ($this->breakerEnabled) {
                     $this->breaker->recordSuccess($serverId, $toolName);
                 }
+
                 return $result;
             } catch (McpTransportException $e) {
                 $lastError = $e->getMessage();
@@ -186,6 +190,7 @@ final class ResilienceMediator
         // The min() against $maxBackoffMs caps the practical value.
         $exponent = min(max(0, $attempt - 1), 30);
         $raw = $this->baseBackoffMs * (1 << $exponent);
+
         return (int) min($raw, $this->maxBackoffMs);
     }
 }

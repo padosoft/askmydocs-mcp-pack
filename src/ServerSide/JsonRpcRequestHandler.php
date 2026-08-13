@@ -2,6 +2,7 @@
 
 namespace Padosoft\AskMyDocsMcpPack\ServerSide;
 
+use Padosoft\AskMyDocsMcpPack\Contracts\JsonRpcRequestHandlerContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerExposureContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpToolAuthorizerContract;
 use Padosoft\AskMyDocsMcpPack\Support\JsonRpcMessage;
@@ -26,7 +27,7 @@ use Padosoft\AskMyDocsMcpPack\Support\JsonRpcMessage;
  *     invalid request, -32601 method not found, -32602 invalid
  *     params, -32603 internal, -32001..-32099 server-defined)
  */
-final class JsonRpcRequestHandler
+final class JsonRpcRequestHandler implements JsonRpcRequestHandlerContract
 {
     public function __construct(
         private readonly McpServerExposureContract $exposure,
@@ -34,7 +35,7 @@ final class JsonRpcRequestHandler
     ) {}
 
     /**
-     * @param  array<string,mixed> $context  Required keys: `tenant_id`, `actor` (any host-defined identifier).
+     * @param  array<string,mixed>  $context  Required keys: `tenant_id`, `actor` (any host-defined identifier).
      */
     public function handle(JsonRpcMessage $message, array $context = []): ?JsonRpcMessage
     {
@@ -107,6 +108,7 @@ final class JsonRpcRequestHandler
                 ];
             }
         }
+
         return ['tools' => $visible];
     }
 
@@ -128,6 +130,7 @@ final class JsonRpcRequestHandler
                 throw new \DomainException("Tool [{$name}] is not authorized for the current actor.");
             }
             $result = $tool->invoke($args);
+
             return ['content' => $this->normaliseToolResult($result)];
         }
 
@@ -138,9 +141,10 @@ final class JsonRpcRequestHandler
     private function onResourcesList(?string $tenantId): array
     {
         $resources = $this->exposure->resources($tenantId);
+
         return [
             'resources' => array_map(
-                static fn($resource): array => [
+                static fn ($resource): array => [
                     'uri' => $resource->uri(),
                     'name' => $resource->name(),
                     'description' => $resource->description(),
@@ -161,6 +165,7 @@ final class JsonRpcRequestHandler
         foreach ($this->exposure->resources($tenantId) as $resource) {
             if ($resource->uri() === $uri) {
                 $payload = $resource->read();
+
                 return [
                     'contents' => $this->normaliseResourceRead($payload, $uri, $resource->mimeType()),
                 ];
@@ -173,9 +178,10 @@ final class JsonRpcRequestHandler
     private function onPromptsList(?string $tenantId): array
     {
         $prompts = $this->exposure->prompts($tenantId);
+
         return [
             'prompts' => array_map(
-                static fn($prompt): array => [
+                static fn ($prompt): array => [
                     'name' => $prompt->name(),
                     'description' => $prompt->description(),
                     'arguments' => $prompt->arguments(),
@@ -204,6 +210,7 @@ final class JsonRpcRequestHandler
                 if (! isset($rendered['messages'])) {
                     $rendered = ['messages' => array_values($rendered)];
                 }
+
                 return $rendered;
             }
         }
@@ -219,11 +226,12 @@ final class JsonRpcRequestHandler
         if (is_array($result) && array_is_list($result)) {
             return $result;
         }
+
         return [['type' => 'text', 'text' => (string) json_encode($result, JSON_UNESCAPED_UNICODE)]];
     }
 
     /**
-     * @param string|array<int,array<string,mixed>> $payload
+     * @param  string|array<int,array<string,mixed>>  $payload
      * @return array<int,array<string,mixed>>
      */
     private function normaliseResourceRead(string|array $payload, string $uri, string $mimeType): array
@@ -231,6 +239,7 @@ final class JsonRpcRequestHandler
         if (is_string($payload)) {
             return [['uri' => $uri, 'mimeType' => $mimeType, 'text' => $payload]];
         }
+
         // Caller returned its own block list — backfill `uri` on any
         // block missing it so the client can always correlate content
         // back to the requested resource (MCP spec requires `uri` per
@@ -240,6 +249,7 @@ final class JsonRpcRequestHandler
                 if (! isset($block['uri']) || $block['uri'] === '') {
                     $block['uri'] = $uri;
                 }
+
                 return $block;
             },
             $payload,

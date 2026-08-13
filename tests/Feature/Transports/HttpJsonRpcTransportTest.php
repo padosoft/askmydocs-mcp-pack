@@ -5,6 +5,7 @@ namespace Padosoft\AskMyDocsMcpPack\Tests\Feature\Transports;
 use Illuminate\Support\Facades\Http;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpTransportException;
 use Padosoft\AskMyDocsMcpPack\Support\JsonRpcMessage;
+use Padosoft\AskMyDocsMcpPack\Support\McpProtocolEra;
 use Padosoft\AskMyDocsMcpPack\Tests\TestCase;
 use Padosoft\AskMyDocsMcpPack\Transports\HttpJsonRpcTransport;
 
@@ -57,6 +58,33 @@ class HttpJsonRpcTransportTest extends TestCase
         $transport->request(JsonRpcMessage::request(1, 'tools/list'));
     }
 
+    public function test_response_size_is_bounded_and_non_json_errors_do_not_echo_the_body(): void
+    {
+        Http::fakeSequence()
+            ->push(str_repeat('x', 33), 200)
+            ->push('secret-upstream-detail', 503);
+
+        $transport = new HttpJsonRpcTransport([
+            'endpoint' => 'http://gateway.example.test/rpc',
+            'max_response_bytes' => 32,
+        ]);
+        try {
+            $transport->request(JsonRpcMessage::request(1, 'tools/list'));
+            $this->fail('Expected the response size guard.');
+        } catch (McpTransportException $e) {
+            $this->assertStringContainsString('size limit', $e->getMessage());
+        }
+
+        $transport = new HttpJsonRpcTransport(['endpoint' => 'http://gateway.example.test/rpc']);
+        try {
+            $transport->request(JsonRpcMessage::request(2, 'tools/list'));
+            $this->fail('Expected the upstream status failure.');
+        } catch (McpTransportException $e) {
+            $this->assertStringContainsString('status 503', $e->getMessage());
+            $this->assertStringNotContainsString('secret-upstream-detail', $e->getMessage());
+        }
+    }
+
     public function test_is_healthy_hits_health_path(): void
     {
         Http::fake([
@@ -77,5 +105,41 @@ class HttpJsonRpcTransportTest extends TestCase
 
         $this->expectException(\InvalidArgumentException::class);
         $transport->request(JsonRpcMessage::notification('progress'));
+    }
+
+    public function test_modern_headers_and_legacy_session_are_exposed(): void
+    {
+        Http::fakeSequence()
+            ->push([
+                'jsonrpc' => '2.0',
+                'id' => 'modern',
+                'result' => ['ok' => true],
+            ], 200)
+            ->push([
+                'jsonrpc' => '2.0',
+                'id' => 'init',
+                'result' => ['protocolVersion' => '2025-11-25'],
+            ], 200, ['Mcp-Session-Id' => 'session-123'])
+            ->push([
+                'jsonrpc' => '2.0',
+                'id' => 'list',
+                'result' => ['tools' => []],
+            ], 200);
+
+        $transport = new HttpJsonRpcTransport(['endpoint' => 'https://gateway.example.test/mcp']);
+        $transport->useProtocol(McpProtocolEra::Modern, '2026-07-28');
+        $transport->request(JsonRpcMessage::request('modern', 'tools/call', ['name' => 'search']));
+
+        Http::assertSent(static fn ($request): bool => $request->header('MCP-Protocol-Version') === ['2026-07-28']
+            && $request->header('Mcp-Method') === ['tools/call']
+            && $request->header('Mcp-Name') === ['search']);
+
+        $transport->useProtocol(McpProtocolEra::Legacy, '2025-11-25');
+        $transport->request(JsonRpcMessage::request('init', 'initialize'));
+        $transport->request(JsonRpcMessage::request('list', 'tools/list'));
+
+        $this->assertSame('session-123', $transport->sessionId());
+        $this->assertSame(200, $transport->lastStatusCode());
+        Http::assertSent(static fn ($request): bool => $request->header('Mcp-Session-Id') === ['session-123']);
     }
 }

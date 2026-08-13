@@ -41,9 +41,9 @@ class McpToolCallingService
     ) {}
 
     /**
-     * @param  array<int,array<string,mixed>> $messages
-     * @param  array<string,mixed>            $extras
-     * @param  array<string,mixed>            $context  tenant_id, actor, conversation_id, message_id
+     * @param  array<int,array<string,mixed>>  $messages
+     * @param  array<string,mixed>  $extras
+     * @param  array<string,mixed>  $context  tenant_id, actor, conversation_id, message_id
      */
     public function chatWithTools(
         array $messages,
@@ -92,6 +92,7 @@ class McpToolCallingService
                         toolName: $name,
                         content: (string) json_encode(['error' => "Tool [{$name}] is not configured for the current tenant."]),
                     );
+
                     continue;
                 }
 
@@ -101,7 +102,12 @@ class McpToolCallingService
                     server: $entry['server'],
                     toolName: $name,
                     arguments: $arguments,
-                    context: $context + ['tenant_id' => $tenantId, 'actor' => $actor],
+                    context: array_merge($context, [
+                        'tenant_id' => $tenantId,
+                        'actor' => $actor,
+                        'read_only' => $entry['tool']->isReadOnly(),
+                        'idempotent' => $entry['tool']->isIdempotent(),
+                    ]),
                 );
 
                 $conversation[] = HostMessage::tool(
@@ -164,19 +170,19 @@ class McpToolCallingService
      * Extracts the ordered, zero-indexed list of {@see McpToolContract} instances
      * from the catalog map keyed by tool name.
      *
-     * @param  array<string,array{tool:McpToolContract,server:McpServerContract}> $toolMap
+     * @param  array<string,array{tool:McpToolContract,server:McpServerContract}>  $toolMap
      * @return array<int,McpToolContract>
      */
     protected function extractToolsFromMap(array $toolMap): array
     {
         return array_values(array_map(
-            static fn(array $entry): McpToolContract => $entry['tool'],
+            static fn (array $entry): McpToolContract => $entry['tool'],
             $toolMap,
         ));
     }
 
     /**
-     * @param  array<int,array{id:string,name:string,arguments:array<string,mixed>}> $toolCalls
+     * @param  array<int,array{id:string,name:string,arguments:array<string,mixed>}>  $toolCalls
      * @return array<int,array{id:string,type:string,function:array{name:string,arguments:string}}>
      */
     protected function reshapeToolCallsForProvider(array $toolCalls): array
@@ -184,7 +190,7 @@ class McpToolCallingService
         $reshaped = [];
         foreach ($toolCalls as $call) {
             $reshaped[] = [
-                'id' => (string) ($call['id'] ?? ('tool_' . bin2hex(random_bytes(8)))),
+                'id' => (string) ($call['id'] ?? ('tool_'.bin2hex(random_bytes(8)))),
                 'type' => 'function',
                 'function' => [
                     'name' => (string) ($call['name'] ?? ''),

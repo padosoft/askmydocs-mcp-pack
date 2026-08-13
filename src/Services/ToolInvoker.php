@@ -2,6 +2,7 @@
 
 namespace Padosoft\AskMyDocsMcpPack\Services;
 
+use Illuminate\Database\Eloquent\Model;
 use Padosoft\AskMyDocsMcpPack\Contracts\McpServerContract;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpTransportException;
 use Padosoft\AskMyDocsMcpPack\Models\McpToolCallAudit;
@@ -24,8 +25,8 @@ class ToolInvoker
     ) {}
 
     /**
-     * @param  array<string,mixed> $arguments
-     * @param  array<string,mixed> $context  tenant_id, actor, conversation_id, message_id
+     * @param  array<string,mixed>  $arguments
+     * @param  array<string,mixed>  $context  tenant_id, actor, conversation_id, message_id
      */
     public function invoke(
         McpServerContract $server,
@@ -34,19 +35,30 @@ class ToolInvoker
         array $context = [],
     ): ToolCallResult {
         $start = microtime(true);
-        $toolCallId = 'tool_' . bin2hex(random_bytes(8));
+        $toolCallId = 'tool_'.bin2hex(random_bytes(8));
         $status = 'ok';
         $error = null;
         $result = null;
+        $client = null;
 
         $tenantId = (string) ($context['tenant_id'] ?? $server->tenantId() ?? 'default');
 
         try {
             $client = McpClient::forServer($server);
-            $call = static fn(): array => $client->callTool($toolName, $arguments);
+            $call = static fn (): array => $client->callTool($toolName, $arguments);
             $result = $this->resilience === null
                 ? $call()
-                : $this->resilience->execute($tenantId, $server->id(), $toolName, $call);
+                : $this->resilience->execute(
+                    $tenantId,
+                    $server->id(),
+                    $toolName,
+                    $call,
+                    retryable: (bool) ($context['read_only'] ?? false) || (bool) ($context['idempotent'] ?? false),
+                );
+            $context['protocol_version'] ??= $client->negotiatedProtocol()?->protocolVersion;
+            $context['result_type'] ??= is_string($result['resultType'] ?? null) ? $result['resultType'] : null;
+            $context['task_id'] ??= is_string(data_get($result, 'task.taskId')) ? data_get($result, 'task.taskId') : null;
+            $context['artifact_ids'] ??= is_array($result['artifactIds'] ?? null) ? $result['artifactIds'] : null;
         } catch (McpTransportException $e) {
             $status = 'transport_error';
             $error = $e->getMessage();
@@ -69,9 +81,9 @@ class ToolInvoker
     }
 
     /**
-     * @param array<string,mixed>      $arguments
-     * @param array<string,mixed>|null $result
-     * @param array<string,mixed>      $context
+     * @param  array<string,mixed>  $arguments
+     * @param  array<string,mixed>|null  $result
+     * @param  array<string,mixed>  $context
      */
     protected function audit(
         McpServerContract $server,
@@ -96,7 +108,7 @@ class ToolInvoker
                 // up under strict-mode databases and silently drop the
                 // audit row through the catch.
                 'tenant_id' => $context['tenant_id'] ?? $server->tenantId() ?? 'default',
-                'actor' => isset($context['actor']) ? (string) $context['actor'] : null,
+                'actor' => $this->actorId($context['actor'] ?? null),
                 'mcp_server_id' => $server->id(),
                 'mcp_server_name' => $server->name(),
                 'conversation_id' => $context['conversation_id'] ?? null,
@@ -108,7 +120,11 @@ class ToolInvoker
                     : null,
                 'duration_ms' => (int) round($latencyMs),
                 'status' => $status,
-                'error_excerpt' => $error !== null ? mb_substr($error, 0, 500) : null,
+                'error_excerpt' => $error !== null ? $this->redactError($error) : null,
+                'protocol_version' => $context['protocol_version'] ?? null,
+                'result_type' => $context['result_type'] ?? null,
+                'task_id' => $context['task_id'] ?? null,
+                'artifact_ids' => isset($context['artifact_ids']) && is_array($context['artifact_ids']) ? $context['artifact_ids'] : null,
             ]);
         } catch (\Throwable) {
             // Audit logging MUST NEVER break the user path. Swallow
@@ -121,7 +137,7 @@ class ToolInvoker
      * the audit model and add per-host columns without forking the
      * pack.
      *
-     * @return class-string<\Illuminate\Database\Eloquent\Model>|null
+     * @return class-string<Model>|null
      */
     protected function resolveAuditModelClass(): ?string
     {
@@ -134,5 +150,25 @@ class ToolInvoker
             : McpToolCallAudit::class;
 
         return class_exists($class) ? $class : null;
+    }
+
+    private function actorId(mixed $actor): ?string
+    {
+        $value = is_object($actor) && method_exists($actor, 'getAuthIdentifier')
+            ? $actor->getAuthIdentifier()
+            : data_get($actor, 'id', $actor);
+
+        return is_scalar($value) ? (string) $value : null;
+    }
+
+    private function redactError(string $error): string
+    {
+        $patterns = [
+            '/\bBearer\s+[^\s,;]+/i' => 'Bearer [REDACTED]',
+            '/\b(sk|pk|rk)_[A-Za-z0-9_-]{8,}\b/' => '[REDACTED_KEY]',
+            '/\b(token|api[_-]?key|password|secret)=([^\s&]+)/i' => '$1=[REDACTED]',
+        ];
+
+        return mb_substr((string) preg_replace(array_keys($patterns), array_values($patterns), $error), 0, 500);
     }
 }

@@ -22,10 +22,12 @@ abstract class TestCase extends Orchestra
         ]);
         $app['config']->set('mcp-pack.tool_calling.enabled', true);
         $app['config']->set('mcp-pack.handshake.ttl_seconds', 0);
+        $app['config']->set('queue.default', 'sync');
+        $app['config']->set('app.key', 'base64:'.base64_encode(str_repeat('m', 32)));
     }
 
     protected function defineDatabaseMigrations(): void
     {
-        $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
+        $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
     }
 }

@@ -18,9 +18,9 @@ use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\InvokeToolRequest;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\StoreServerRequest;
 use Padosoft\AskMyDocsMcpPack\Http\Admin\Requests\UpdateServerRequest;
 use Padosoft\AskMyDocsMcpPack\Services\McpHandshakeService;
+use Padosoft\AskMyDocsMcpPack\Services\RemoteMcpTool;
 use Padosoft\AskMyDocsMcpPack\Services\ToolInvoker;
 use Padosoft\AskMyDocsMcpPack\Support\McpAdminConfirmToken;
-use Padosoft\AskMyDocsMcpPack\Support\McpServerPage;
 use Padosoft\AskMyDocsMcpPack\Support\ToolCallResult;
 
 /**
@@ -43,8 +43,8 @@ use Padosoft\AskMyDocsMcpPack\Support\ToolCallResult;
  */
 final class ServersController
 {
-    use ResolvesAdminContext;
     use MintsConfirmTokens;
+    use ResolvesAdminContext;
 
     public function __construct(
         private readonly McpServerRegistryContract $registry,
@@ -82,7 +82,7 @@ final class ServersController
 
                 return new JsonResponse([
                     'data' => array_map(
-                        fn(McpServerContract $s): array => $this->resourceShape($s),
+                        fn (McpServerContract $s): array => $this->resourceShape($s),
                         $result->data,
                     ),
                     'meta' => $result->meta() + ['tenant_id' => $tenantId],
@@ -94,7 +94,7 @@ final class ServersController
 
         return new JsonResponse([
             'data' => array_map(
-                fn(McpServerContract $s): array => $this->resourceShape($s),
+                fn (McpServerContract $s): array => $this->resourceShape($s),
                 $servers,
             ),
             'meta' => [
@@ -173,7 +173,7 @@ final class ServersController
         if ($allowed !== []) {
             $tools = array_values(array_filter(
                 $tools,
-                static fn(array $tool): bool => in_array((string) ($tool['name'] ?? ''), $allowed, true),
+                static fn (array $tool): bool => in_array((string) ($tool['name'] ?? ''), $allowed, true),
             ));
         }
 
@@ -258,7 +258,7 @@ final class ServersController
             );
         }
 
-        return $this->withHostBridge(function () use ($request, $id, $tenantId): JsonResponse {
+        return $this->withHostBridge(function () use ($request, $id): JsonResponse {
             try {
                 $server = $this->mutableRegistry->update($id, $request->payload());
             } catch (McpServerNotFoundException $e) {
@@ -267,6 +267,7 @@ final class ServersController
                 // envelope, never a 500.
                 return $this->notFound($e->getMessage());
             }
+
             return new JsonResponse(['data' => $this->resourceShape($server)]);
         });
     }
@@ -301,13 +302,14 @@ final class ServersController
 
         return $this->withHostBridge(function () use ($id): JsonResponse {
             try {
-                $deleted = DB::transaction(fn(): bool => $this->mutableRegistry->delete($id));
+                $deleted = DB::transaction(fn (): bool => $this->mutableRegistry->delete($id));
             } catch (McpServerNotFoundException $e) {
                 return $this->notFound($e->getMessage());
             }
             if (! $deleted) {
                 return $this->notFound("Server [{$id}] not found.");
             }
+
             return new JsonResponse(null, 204);
         });
     }
@@ -367,7 +369,7 @@ final class ServersController
         // the call and ask the authorizer directly.
         $tenantId = $this->resolveTenantId($request);
         $actor = $this->resolveActor($request);
-        $toolFacade = new \Padosoft\AskMyDocsMcpPack\Services\RemoteMcpTool(
+        $toolFacade = new RemoteMcpTool(
             name: $toolName,
             payload: ['description' => "Admin invoke of {$toolName} on {$server->id()}"],
             server: $server,
@@ -401,7 +403,7 @@ final class ServersController
 
         if ($isDestructive) {
             $confirmToken = $payload['confirm_token'] ?? null;
-            $confirmTargetId = $server->id() . ':' . $toolName;
+            $confirmTargetId = $server->id().':'.$toolName;
 
             if ($confirmToken === null) {
                 // Mint path — return 202 with a single-use token the
@@ -487,11 +489,13 @@ final class ServersController
             if ((string) ($tool['name'] ?? '') !== $toolName) {
                 continue;
             }
+
             return filter_var(
-                $tool['destructive'] ?? false,
+                $tool['annotations']['destructiveHint'] ?? $tool['destructive'] ?? false,
                 FILTER_VALIDATE_BOOLEAN,
             );
         }
+
         return false;
     }
 
@@ -516,6 +520,7 @@ final class ServersController
             return $email;
         }
         $userId = data_get($user, 'id');
+
         return $userId !== null ? (string) $userId : null;
     }
 
@@ -539,6 +544,7 @@ final class ServersController
                 return true;
             }
         }
+
         return false;
     }
 
@@ -552,7 +558,7 @@ final class ServersController
                 'transport' => $request->query('transport'),
                 'enabled' => $request->query('enabled'),
             ],
-            static fn($v): bool => $v !== null && $v !== '',
+            static fn ($v): bool => $v !== null && $v !== '',
         );
     }
 
@@ -573,6 +579,7 @@ final class ServersController
                 return $server;
             }
         }
+
         return null;
     }
 
