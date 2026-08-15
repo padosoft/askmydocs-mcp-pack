@@ -21,6 +21,7 @@ final class FlysystemArtifactManager implements ArtifactManagerContract
         private readonly FilesystemFactory $filesystems,
         private readonly ConnectionInterface $db,
         private readonly UrlGenerator $urls,
+        private readonly ArtifactDownloadScope $downloadScope,
     ) {}
 
     public function create(Artifact $artifact, ?string $tenantId, ?string $actorId): McpArtifact
@@ -93,7 +94,12 @@ final class FlysystemArtifactManager implements ArtifactManagerContract
         try {
             return $this->filesystems->disk((string) $artifact->disk)->temporaryUrl((string) $artifact->path, $expires, ['ResponseContentDisposition' => 'attachment; filename="'.addcslashes((string) $artifact->name, '"\\').'"']);
         } catch (\Throwable) {
-            return $this->urls->temporarySignedRoute('mcp-pack.v2.artifacts.download', $expires, ['artifact' => $artifact->getKey()]);
+            // The package route re-applies the same tenant/actor scope on download;
+            // the pair travels encrypted inside the signed URL (never resolved by UUID alone).
+            return $this->urls->temporarySignedRoute('mcp-pack.v2.artifacts.download', $expires, [
+                'artifact' => $artifact->getKey(),
+                'scope' => $this->downloadScope->encode($tenantId, $actorId),
+            ]);
         }
     }
 

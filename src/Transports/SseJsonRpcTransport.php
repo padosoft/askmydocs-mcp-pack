@@ -101,9 +101,18 @@ final class SseJsonRpcTransport implements McpProtocolAwareTransportContract
                 ->withHeaders($this->headersFor($notification))
                 ->asJson()
                 ->post($this->endpoint(), $notification->toArray());
-            $this->assertResponseSize($response->body());
         } catch (\Throwable $e) {
             throw new McpTransportException("SSE MCP transport notify failed: {$e->getMessage()}", 0, $e);
+        }
+
+        // Notifications have no JSON-RPC reply, but the HTTP status still tells us
+        // whether the server accepted them (2xx/202) or rejected them (e.g. 401/404).
+        // Treating a rejected `notifications/initialized` as success would let legacy
+        // negotiation continue against an uninitialized server.
+        $this->captureResponseState($response);
+        $this->assertResponseSize($response->body());
+        if ($response->failed()) {
+            throw new McpTransportException("SSE MCP transport notify returned status {$response->status()}.");
         }
     }
 

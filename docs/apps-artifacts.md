@@ -8,6 +8,6 @@ App permissions follow the extension object shape (`camera`, `microphone`, `geol
 
 `ui/download-file` is draft behavior and disabled by default. Enable it deliberately before calling `App::downloadFile()`; normal downloadable output should use stable embedded resources or resource links.
 
-Create artifacts with `Artifact::make()`, then `ArtifactManagerContract::create()`. Defaults are private storage, 25 MiB maximum, 24-hour TTL and five-minute signed download URLs. Names are sanitized, storage paths are generated from UUIDs, SHA-256 is rechecked on every read, and executable MIME/content signatures are rejected. Artifacts are immutable: create a new UUID for every revision.
+Create artifacts with `Artifact::make()`, then `ArtifactManagerContract::create()`. Defaults are private storage, 25 MiB maximum, 24-hour TTL and five-minute signed download URLs. Package-signed download URLs carry the tenant/actor scope they were minted for (encrypted) and the download route resolves the artifact through the scoped `read()` path — never by UUID alone. Names are sanitized, storage paths are generated from UUIDs, SHA-256 is rechecked on every read, and executable MIME/content signatures are rejected. Artifacts are immutable: create a new UUID for every revision.
 
 `McpResult::artifact()` embeds files below 64 KiB and links larger files as `artifact://<uuid>`. `resources/read` rechecks tenant and actor on every artifact read. Download responses are attachments with `nosniff` and private no-store caching.

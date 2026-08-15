@@ -8,7 +8,22 @@ use Padosoft\AskMyDocsMcpPack\Contracts\V2\DefinitionContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\V2\SubscriptionBrokerContract;
 use Padosoft\AskMyDocsMcpPack\Contracts\V2\TenantCatalogContract;
 use Padosoft\AskMyDocsMcpPack\Fluent\Definitions\ServerDefinition;
+use Padosoft\AskMyDocsMcpPack\Protocol\CacheScope;
 
+/**
+ * Compiled server catalog: immutable base definitions plus tenant/principal-scoped
+ * overlays applied through {@see TenantCatalogContract::upsert()} / `remove()`.
+ *
+ * Overlays and their revision counters live in THIS PHP process only. Compiled
+ * definitions carry handlers (closures for synchronous tools), which cannot be
+ * serialised into a shared store, so dynamic changes are deliberately not
+ * replicated across workers. Hosts running several stateless workers must apply
+ * dynamic mutations deterministically on every worker (e.g. from a service
+ * provider or per-request middleware) so that each worker computes the same
+ * overlays and revision. Only the derived snapshot is shared through the cache,
+ * and it is keyed by revision so workers on different revisions never overwrite
+ * each other's entry.
+ */
 final class ServerCatalog implements CatalogContract
 {
     /** @var array<string,array<string,DefinitionContract>> */
@@ -34,6 +49,14 @@ final class ServerCatalog implements CatalogContract
 
     public function forTenant(?string $tenantId, ?string $principalId = null): TenantCatalogContract
     {
+        // The principal is part of the catalog scope only for private-cache servers.
+        // Public / no-store catalogs are shared by every principal of a tenant, so
+        // normalise here: programmatic `forTenant($tenant, $principal)->upsert()` and
+        // request-time lookups must always resolve to the same scope.
+        if ($this->server->cacheScope !== CacheScope::Private) {
+            $principalId = null;
+        }
+
         return new TenantCatalog($this, $tenantId, $principalId);
     }
 
@@ -80,10 +103,11 @@ final class ServerCatalog implements CatalogContract
     /** @return array{revision:int,digest:string,definitions:array<string,list<array<string,mixed>>>} */
     public function scopedSnapshot(string $scope): array
     {
-        $key = "mcp-pack:v2:catalog:{$this->server->id}:{$scope}";
+        $revision = $this->revision($scope);
+        $key = $this->snapshotKey($scope, $revision);
         if ($this->server->cacheScope->value !== 'no-store') {
             $cached = $this->cache->get($key);
-            if (is_array($cached) && ($cached['revision'] ?? null) === $this->revision($scope)) {
+            if (is_array($cached) && ($cached['revision'] ?? null) === $revision) {
                 return $cached;
             }
         }
@@ -94,7 +118,7 @@ final class ServerCatalog implements CatalogContract
             )));
         }
         $json = json_encode($definitions, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
-        $snapshot = ['revision' => $this->revision($scope), 'digest' => hash('sha256', $json), 'definitions' => $definitions];
+        $snapshot = ['revision' => $revision, 'digest' => hash('sha256', $json), 'definitions' => $definitions];
         if ($this->server->cacheScope->value !== 'no-store' && $this->server->ttlMs > 0) {
             $this->cache->put($key, $snapshot, max(1, (int) ceil($this->server->ttlMs / 1000)));
         }
@@ -102,10 +126,22 @@ final class ServerCatalog implements CatalogContract
         return $snapshot;
     }
 
+    /**
+     * Snapshot cache keys are qualified by revision. Overlays and revisions are
+     * process-local (see the class docblock), so two workers may legitimately sit on
+     * different revisions of the same scope; keying by revision keeps them from
+     * overwriting each other's cached snapshot in the shared store.
+     */
+    private function snapshotKey(string $scope, int $revision): string
+    {
+        return "mcp-pack:v2:catalog:{$this->server->id}:{$scope}:r{$revision}";
+    }
+
     private function changed(string $scope, ?string $tenantId, ?string $principalId, string $kind): void
     {
-        $this->revisions[$scope] = $this->revision($scope) + 1;
-        $this->cache->forget("mcp-pack:v2:catalog:{$this->server->id}:{$scope}");
+        $previous = $this->revision($scope);
+        $this->revisions[$scope] = $previous + 1;
+        $this->cache->forget($this->snapshotKey($scope, $previous));
         $this->subscriptions->publish($tenantId, 'notifications/'.$kind.'/list_changed', [
             'server' => $this->server->id,
             'kind' => $kind,

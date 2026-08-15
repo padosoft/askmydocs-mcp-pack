@@ -7,6 +7,7 @@ use Padosoft\AskMyDocsMcpPack\Fluent\App;
 use Padosoft\AskMyDocsMcpPack\Fluent\Definitions\ToolDefinition;
 use Padosoft\AskMyDocsMcpPack\Fluent\McpManager;
 use Padosoft\AskMyDocsMcpPack\Fluent\Tool;
+use Padosoft\AskMyDocsMcpPack\Protocol\CacheScope;
 use Padosoft\AskMyDocsMcpPack\Tests\Support\TestAppFactory;
 use Padosoft\AskMyDocsMcpPack\Tests\TestCase;
 
@@ -31,6 +32,29 @@ final class FluentCatalogTest extends TestCase
         $this->assertTrue($tenantA->remove('tools', 'alpha'));
         $this->assertSame(['beta', 'zeta'], array_column($tenantA->snapshot()['definitions']['tools'], 'name'));
         $this->assertFalse($tenantA->remove('tools', 'missing'));
+    }
+
+    public function test_principal_is_only_part_of_the_scope_for_private_cache_servers(): void
+    {
+        $manager = $this->app->make(McpManager::class);
+        $manager->server('shared')->cache(1_000, CacheScope::Public)->tool(Tool::make('alpha')->handle(fn () => 'a'))->register();
+        $manager->server('nostore')->cache(0, CacheScope::NoStore)->tool(Tool::make('alpha')->handle(fn () => 'a'))->register();
+
+        foreach (['shared', 'nostore'] as $serverId) {
+            // A programmatic `forTenant($tenant, $principal)->upsert()` on a non-private
+            // server must land in the same scope the request handler reads (tenant only),
+            // otherwise the overlay is written where public/no-store lookups never look.
+            $manager->require($serverId)->forTenant('acme', 'alice')->upsert(new ToolDefinition('beta', null, ['type' => 'object'], null, fn () => 'b'));
+            $this->assertSame(['alpha', 'beta'], array_column($manager->require($serverId)->forTenant('acme', null)->snapshot()['definitions']['tools'], 'name'), $serverId);
+            $this->assertSame(['alpha', 'beta'], array_column($manager->require($serverId)->forTenant('acme', 'bob')->snapshot()['definitions']['tools'], 'name'), $serverId);
+            // Tenant isolation is unaffected.
+            $this->assertSame(['alpha'], array_column($manager->require($serverId)->forTenant('globex', 'alice')->snapshot()['definitions']['tools'], 'name'), $serverId);
+        }
+
+        // Private servers keep the principal in the scope (see the previous test).
+        $manager->server('private')->tool(Tool::make('alpha')->handle(fn () => 'a'))->register();
+        $manager->require('private')->forTenant('acme', 'alice')->upsert(new ToolDefinition('beta', null, ['type' => 'object'], null, fn () => 'b'));
+        $this->assertSame(['alpha'], array_column($manager->require('private')->forTenant('acme', 'bob')->snapshot()['definitions']['tools'], 'name'));
     }
 
     public function test_async_closures_are_rejected_at_compile_time(): void

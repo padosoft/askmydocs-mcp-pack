@@ -22,7 +22,10 @@ final class Resource
 
     private function __construct(private readonly string $uri)
     {
-        if (filter_var($uri, FILTER_VALIDATE_URL) === false && ! preg_match('/^[a-z][a-z0-9+.-]*:\/\//i', $uri)) {
+        // RFC 3986 absolute URI: scheme ":" hier-part. Only the scheme delimiter is
+        // required — an authority ("//") is optional, so `urn:`, `mailto:`, `data:`
+        // and `tel:` URIs are valid alongside `https://`, `docs://` and `ui://`.
+        if (! preg_match('/^[a-z][a-z0-9+.-]*:\S+$/i', $uri)) {
             throw new \InvalidArgumentException('Resource URI must be an absolute URI.');
         }
     }

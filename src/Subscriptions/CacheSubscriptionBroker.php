@@ -2,24 +2,51 @@
 
 namespace Padosoft\AskMyDocsMcpPack\Subscriptions;
 
+use Illuminate\Contracts\Cache\LockProvider;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Support\Str;
 use Padosoft\AskMyDocsMcpPack\Contracts\V2\SubscriptionBrokerContract;
 
 final class CacheSubscriptionBroker implements SubscriptionBrokerContract
 {
-    public function __construct(private readonly Repository $cache, private readonly int $ttlSeconds = 3600) {}
+    public function __construct(
+        private readonly Repository $cache,
+        private readonly int $ttlSeconds = 3600,
+        private readonly int $lockSeconds = 5,
+        private readonly int $lockWaitSeconds = 3,
+    ) {}
 
     public function publish(?string $tenantId, string $topic, array $payload, ?string $principalId = null): void
     {
         try {
             $key = $this->key($tenantId, $principalId);
-            $events = $this->cache->get($key, []);
-            if (! is_array($events)) {
-                $events = [];
+            $event = ['id' => (string) Str::uuid(), 'topic' => $topic, 'payload' => $payload, 'createdAt' => now()->toAtomString()];
+            $append = function () use ($key, $event): void {
+                $events = $this->cache->get($key, []);
+                if (! is_array($events)) {
+                    $events = [];
+                }
+                $events[] = $event;
+                $this->cache->put($key, array_slice($events, -1000), $this->ttlSeconds);
+            };
+
+            // The append is a read-modify-write on a shared list: two workers publishing
+            // to the same tenant/principal at once would otherwise overwrite each other
+            // and silently drop progress / list_changed notifications. Serialise it
+            // through the store's atomic lock whenever the driver provides one.
+            $store = $this->cache->getStore();
+            if ($store instanceof LockProvider) {
+                try {
+                    $store->lock($key.':lock', $this->lockSeconds)->block($this->lockWaitSeconds, $append);
+
+                    return;
+                } catch (LockTimeoutException) {
+                    // Fall through: a best-effort unlocked append beats dropping the
+                    // event, and notifications must never block the user path.
+                }
             }
-            $events[] = ['id' => (string) Str::uuid(), 'topic' => $topic, 'payload' => $payload, 'createdAt' => now()->toAtomString()];
-            $this->cache->put($key, array_slice($events, -1000), $this->ttlSeconds);
+            $append();
         } catch (\Throwable) {
             // Notifications are advisory and never block the user path.
         }

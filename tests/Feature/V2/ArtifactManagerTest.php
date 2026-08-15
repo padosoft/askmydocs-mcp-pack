@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\Storage;
 use Padosoft\AskMyDocsMcpPack\Artifacts\Artifact;
 use Padosoft\AskMyDocsMcpPack\Contracts\V2\ArtifactManagerContract;
+use Padosoft\AskMyDocsMcpPack\Models\McpArtifact;
 use Padosoft\AskMyDocsMcpPack\Protocol\McpResult;
 use Padosoft\AskMyDocsMcpPack\Tests\TestCase;
 
@@ -104,5 +105,26 @@ final class ArtifactManagerTest extends TestCase
 
         $this->travel(61)->seconds();
         $this->get($url)->assertForbidden();
+    }
+
+    public function test_signed_download_reapplies_tenant_and_actor_scope(): void
+    {
+        Storage::persistentFake('mcp-artifacts');
+        config()->set('mcp-pack.artifacts.disk', 'mcp-artifacts');
+        $manager = $this->app->make(ArtifactManagerContract::class);
+        $artifact = $manager->create(Artifact::make('report.txt')->mimeType('text/plain')->contents('private report'), 'acme', 'alice');
+        $url = $manager->temporaryUrl($artifact->getKey(), 'acme', 'alice', 60);
+
+        // The signed capability carries the scope it was minted for: the URL never
+        // resolves the row by UUID alone, so a row that no longer matches that
+        // tenant/actor pair is not served even though the signature is still valid.
+        McpArtifact::query()->whereKey($artifact->getKey())->update(['tenant_id' => 'globex']);
+        $this->get($url)->assertNotFound();
+
+        // A syntactically valid signature with a forged/missing scope is rejected too.
+        $forged = preg_replace('/([?&])scope=[^&]*/', '$1scope=forged', $url);
+        $this->assertIsString($forged);
+        $this->assertNotSame($url, $forged);
+        $this->get($forged)->assertForbidden();
     }
 }
