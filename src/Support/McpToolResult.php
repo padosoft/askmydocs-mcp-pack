@@ -58,6 +58,15 @@ final readonly class McpToolResult
         return $this->resultType === 'task' || $this->task !== null;
     }
 
+    public function remoteTask(): ?McpRemoteTask
+    {
+        if (! $this->isTask()) {
+            return null;
+        }
+
+        return McpRemoteTask::fromEnvelope($this->raw);
+    }
+
     /** @return array<string,mixed> */
     public function toArray(): array
     {

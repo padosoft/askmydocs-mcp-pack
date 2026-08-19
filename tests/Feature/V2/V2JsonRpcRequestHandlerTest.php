@@ -159,7 +159,10 @@ final class V2JsonRpcRequestHandlerTest extends TestCase
     {
         $params['_meta'] = [
             'io.modelcontextprotocol/protocolVersion' => '2026-07-28',
-            'io.modelcontextprotocol/clientCapabilities' => ['io.modelcontextprotocol/ui' => new \stdClass, 'io.modelcontextprotocol/tasks' => new \stdClass],
+            'io.modelcontextprotocol/clientCapabilities' => ['extensions' => [
+                'io.modelcontextprotocol/ui' => new \stdClass,
+                'io.modelcontextprotocol/tasks' => new \stdClass,
+            ]],
             'clientInfo' => ['name' => 'tests', 'version' => '1'],
         ];
         $response = $this->handler->handle(JsonRpcMessage::request('test', $method, $params), ['server_id' => 'default', 'tenant_id' => 'acme', 'principal_id' => 'alice']);

@@ -117,6 +117,11 @@ class HttpJsonRpcTransportTest extends TestCase
             ], 200)
             ->push([
                 'jsonrpc' => '2.0',
+                'id' => 'task',
+                'result' => ['resultType' => 'complete', 'taskId' => 'task-123', 'status' => 'working', 'ttlMs' => 60_000],
+            ], 200)
+            ->push([
+                'jsonrpc' => '2.0',
                 'id' => 'init',
                 'result' => ['protocolVersion' => '2025-11-25'],
             ], 200, ['Mcp-Session-Id' => 'session-123'])
@@ -133,6 +138,10 @@ class HttpJsonRpcTransportTest extends TestCase
         Http::assertSent(static fn ($request): bool => $request->header('MCP-Protocol-Version') === ['2026-07-28']
             && $request->header('Mcp-Method') === ['tools/call']
             && $request->header('Mcp-Name') === ['search']);
+
+        $transport->request(JsonRpcMessage::request('task', 'tasks/get', ['taskId' => 'task-123']));
+        Http::assertSent(static fn ($request): bool => $request->header('Mcp-Method') === ['tasks/get']
+            && $request->header('Mcp-Name') === ['task-123']);
 
         $transport->useProtocol(McpProtocolEra::Legacy, '2025-11-25');
         $transport->request(JsonRpcMessage::request('init', 'initialize'));

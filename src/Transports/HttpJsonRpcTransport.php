@@ -176,7 +176,7 @@ final class HttpJsonRpcTransport implements McpProtocolAwareTransportContract
         }
         if ($this->protocolEra === McpProtocolEra::Modern && $message->method !== null) {
             $headers['Mcp-Method'] = $message->method;
-            $name = $message->params['name'] ?? null;
+            $name = $message->params['name'] ?? $message->params['taskId'] ?? null;
             if (is_string($name) && $name !== '') {
                 $headers['Mcp-Name'] = $name;
             }

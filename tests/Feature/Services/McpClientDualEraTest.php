@@ -34,6 +34,10 @@ class McpClientDualEraTest extends TestCase
             'padosoft/askmydocs-mcp-pack',
             $transport->sentRequests[1]->params['_meta']['io.modelcontextprotocol/clientInfo']['name'],
         );
+        $this->assertArrayHasKey(
+            'io.modelcontextprotocol/tasks',
+            $transport->sentRequests[1]->params['_meta']['io.modelcontextprotocol/clientCapabilities']['extensions'],
+        );
         $this->assertSame('padosoft/askmydocs-mcp-pack', $transport->sentRequests[0]->params['clientInfo']['name']);
         $this->assertSame('padosoft/askmydocs-mcp-pack', $transport->sentRequests[1]->params['clientInfo']['name']);
         $this->assertSame(['server/discover', 'tools/list'], array_map(
@@ -205,6 +209,40 @@ class McpClientDualEraTest extends TestCase
         $this->assertTrue($result->isInputRequired());
         $this->assertSame([['name' => 'approval']], $result->inputRequests);
         $this->assertSame(['kept' => true], $result->toArray()['futureField']);
+    }
+
+    public function test_modern_flat_and_pre_release_nested_tasks_share_one_stable_view(): void
+    {
+        $modern = new StubMcpTransport;
+        $modern->responses['server/discover'] = ['protocolVersion' => McpClient::MODERN_PROTOCOL_VERSION];
+        $modern->scriptToolCall('async', [
+            'resultType' => 'task',
+            'taskId' => 'task-modern',
+            'status' => 'working',
+            'ttlMs' => 60_000,
+            'pollIntervalMs' => 250,
+        ]);
+        $modernTask = (new McpClient($this->server(), $modern))->task('async', [])->remoteTask();
+
+        $nested = new StubMcpTransport;
+        $nested->responses['server/discover'] = ['protocolVersion' => McpClient::MODERN_PROTOCOL_VERSION];
+        $nested->scriptToolCall('async', [
+            'resultType' => 'task',
+            'task' => [
+                'taskId' => 'task-nested',
+                'status' => 'input_required',
+                'ttl' => 30_000,
+                'pollInterval' => 500,
+                'inputRequests' => ['approval' => ['method' => 'elicitation/create']],
+            ],
+        ]);
+        $nestedTask = (new McpClient($this->server(), $nested))->task('async', [])->remoteTask();
+
+        $this->assertSame('task-modern', $modernTask?->taskId);
+        $this->assertSame(250, $modernTask?->pollIntervalMs);
+        $this->assertSame('task-nested', $nestedTask?->taskId);
+        $this->assertTrue($nestedTask?->requiresInput());
+        $this->assertSame(30_000, $nestedTask?->ttlMs);
     }
 
     private function server(): InMemoryMcpServer

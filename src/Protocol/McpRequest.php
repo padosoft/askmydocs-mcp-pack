@@ -37,7 +37,8 @@ final readonly class McpRequest
     public function supports(string $capability): bool
     {
         return array_key_exists($capability, $this->clientCapabilities)
-            || data_get($this->clientCapabilities, $capability) !== null;
+            || data_get($this->clientCapabilities, $capability) !== null
+            || array_key_exists($capability, (array) ($this->clientCapabilities['extensions'] ?? []));
     }
 
     public function actorId(): ?string

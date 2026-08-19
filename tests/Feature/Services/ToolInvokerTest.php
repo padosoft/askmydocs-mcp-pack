@@ -75,7 +75,9 @@ class ToolInvokerTest extends TestCase
         $this->scriptModernDiscovery($transport);
         $transport->responses['tools/call:async'] = [
             'resultType' => 'task',
-            'task' => ['taskId' => '00000000-0000-4000-8000-000000000001'],
+            'taskId' => '00000000-0000-4000-8000-000000000001',
+            'status' => 'working',
+            'ttlMs' => 60_000,
             'artifactIds' => ['00000000-0000-4000-8000-000000000002'],
         ];
         McpClient::useTransportResolver(fn () => $transport);

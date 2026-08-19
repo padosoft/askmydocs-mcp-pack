@@ -25,6 +25,8 @@ use Padosoft\AskMyDocsMcpPack\Tasks\TaskStatus;
  * @property int $poll_interval_ms
  * @property CarbonImmutable|null $expires_at
  * @property CarbonImmutable|null $lease_expires_at
+ * @property CarbonImmutable|null $created_at
+ * @property CarbonImmutable|null $updated_at
  */
 final class McpTask extends Model
 {
@@ -56,11 +58,16 @@ final class McpTask extends Model
     /** @return array<string,mixed> */
     public function toProtocolArray(): array
     {
+        $ttlMs = $this->expires_at === null
+            ? null
+            : max(0, (int) now()->diffInMilliseconds($this->expires_at, false));
         $value = [
             'taskId' => (string) $this->getKey(),
             'status' => $this->state instanceof TaskStatus ? $this->state->value : (string) $this->state,
             'pollIntervalMs' => (int) $this->poll_interval_ms,
-            'expiresAt' => $this->expires_at?->toAtomString(),
+            'ttlMs' => $ttlMs,
+            'createdAt' => $this->created_at?->toAtomString(),
+            'lastUpdatedAt' => $this->updated_at?->toAtomString(),
         ];
         if ($this->pending_inputs !== null) {
             $value['inputRequests'] = $this->pending_inputs;

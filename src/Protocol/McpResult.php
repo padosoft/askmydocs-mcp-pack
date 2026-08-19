@@ -133,7 +133,7 @@ final class McpResult
     public function task(McpTask $task): self
     {
         $this->resultType = ResultType::Task;
-        $this->extra['task'] = $task->toProtocolArray();
+        $this->extra = array_merge($this->extra, $task->toProtocolArray());
 
         return $this;
     }

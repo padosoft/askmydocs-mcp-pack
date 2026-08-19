@@ -12,6 +12,7 @@ use Padosoft\AskMyDocsMcpPack\Support\JsonRpcMessage;
 use Padosoft\AskMyDocsMcpPack\Support\McpCatalogPage;
 use Padosoft\AskMyDocsMcpPack\Support\McpNegotiationResult;
 use Padosoft\AskMyDocsMcpPack\Support\McpProtocolEra;
+use Padosoft\AskMyDocsMcpPack\Support\McpRemoteTask;
 use Padosoft\AskMyDocsMcpPack\Support\McpToolResult;
 use Padosoft\AskMyDocsMcpPack\Transports\HttpJsonRpcTransport;
 use Padosoft\AskMyDocsMcpPack\Transports\LegacySseJsonRpcTransport;
@@ -394,6 +395,11 @@ class McpClient
         return $this->call(JsonRpcMessage::request(self::newId(), 'tasks/get', $this->params(['taskId' => $taskId])));
     }
 
+    public function getTaskStatus(string $taskId): McpRemoteTask
+    {
+        return McpRemoteTask::fromEnvelope($this->getTask($taskId));
+    }
+
     /** @param array<string,mixed> $inputResponses @return array<string,mixed> */
     public function updateTask(string $taskId, array $inputResponses, ?string $requestState = null): array
     {
@@ -418,17 +424,22 @@ class McpClient
         $polls = 0;
         do {
             $envelope = $this->getTask($taskId);
-            $task = is_array($envelope['task'] ?? null) ? $envelope['task'] : [];
-            if (in_array($task['status'] ?? null, ['completed', 'failed', 'cancelled'], true)) {
+            $task = McpRemoteTask::fromEnvelope($envelope);
+            if ($task->isTerminal()) {
                 return $envelope;
             }
             $elapsedMs = (int) ((hrtime(true) - $started) / 1_000_000);
             if (++$polls >= max(1, $maxPolls) || $elapsedMs >= max(1, $timeoutMs)) {
                 throw new McpTransportException("Timed out waiting for task [{$taskId}].");
             }
-            $sleepMs = max(50, min((int) ($task['pollIntervalMs'] ?? 1000), max(1, $timeoutMs - $elapsedMs)));
+            $sleepMs = max(50, min($task->pollIntervalMs ?? 1000, max(1, $timeoutMs - $elapsedMs)));
             usleep($sleepMs * 1000);
         } while (true);
+    }
+
+    public function waitForTaskStatus(string $taskId, int $timeoutMs = 60_000, int $maxPolls = 120): McpRemoteTask
+    {
+        return McpRemoteTask::fromEnvelope($this->waitForTask($taskId, $timeoutMs, $maxPolls));
     }
 
     public function transport(): McpTransportContract
@@ -552,8 +563,10 @@ class McpClient
             'io.modelcontextprotocol/clientInfo' => $this->clientInfo(),
             'io.modelcontextprotocol/clientCapabilities' => [
                 'tools' => new \stdClass,
-                'io.modelcontextprotocol/tasks' => new \stdClass,
-                'io.modelcontextprotocol/ui' => ['version' => '2026-01-26'],
+                'extensions' => [
+                    'io.modelcontextprotocol/tasks' => new \stdClass,
+                    'io.modelcontextprotocol/ui' => ['version' => '2026-01-26'],
+                ],
             ],
         ];
     }

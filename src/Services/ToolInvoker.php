@@ -57,7 +57,8 @@ class ToolInvoker
                 );
             $context['protocol_version'] ??= $client->negotiatedProtocol()?->protocolVersion;
             $context['result_type'] ??= is_string($result['resultType'] ?? null) ? $result['resultType'] : null;
-            $context['task_id'] ??= is_string(data_get($result, 'task.taskId')) ? data_get($result, 'task.taskId') : null;
+            $taskId = data_get($result, 'taskId', data_get($result, 'task.taskId'));
+            $context['task_id'] ??= is_string($taskId) ? $taskId : null;
             $context['artifact_ids'] ??= is_array($result['artifactIds'] ?? null) ? $result['artifactIds'] : null;
         } catch (McpTransportException $e) {
             $status = 'transport_error';

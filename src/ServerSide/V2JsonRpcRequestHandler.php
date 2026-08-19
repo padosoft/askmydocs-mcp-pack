@@ -389,7 +389,7 @@ final class V2JsonRpcRequestHandler implements JsonRpcRequestHandlerContract
             return McpResult::recoverableError('Task not found or no longer available.')->toArray($serverInfo);
         }
 
-        return ['resultType' => 'complete', 'serverInfo' => $serverInfo, 'task' => $task->toProtocolArray()];
+        return ['resultType' => 'complete', 'serverInfo' => $serverInfo] + $task->toProtocolArray();
     }
 
     /** @param array<string,mixed> $serverInfo */
@@ -404,7 +404,7 @@ final class V2JsonRpcRequestHandler implements JsonRpcRequestHandlerContract
             return McpResult::recoverableError($e->getMessage())->toArray($serverInfo);
         }
 
-        return ['resultType' => 'complete', 'serverInfo' => $serverInfo, 'task' => $task->toProtocolArray()];
+        return ['resultType' => 'complete', 'serverInfo' => $serverInfo];
     }
 
     /** @param array<string,mixed> $serverInfo */
@@ -417,7 +417,7 @@ final class V2JsonRpcRequestHandler implements JsonRpcRequestHandlerContract
             return McpResult::recoverableError('Task not found or no longer available.')->toArray($serverInfo);
         }
 
-        return ['resultType' => 'complete', 'serverInfo' => $serverInfo, 'task' => $task->toProtocolArray()];
+        return ['resultType' => 'complete', 'serverInfo' => $serverInfo];
     }
 
     private function requireTasks(McpRequest $request): void
