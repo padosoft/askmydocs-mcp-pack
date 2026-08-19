@@ -215,6 +215,21 @@ class McpClient
      */
     public function listResources(?string $cursor = null): array
     {
+        $page = $this->listResourcesPage($cursor);
+
+        return [
+            'resources' => $page->items,
+            'nextCursor' => $page->nextCursor,
+        ];
+    }
+
+    /**
+     * Protocol-era-neutral resource catalog page. Modern servers can attach
+     * cache hints to the result while legacy callers keep using
+     * {@see listResources()} and its original array shape.
+     */
+    public function listResourcesPage(?string $cursor = null): McpCatalogPage
+    {
         $params = $this->params($cursor !== null ? ['cursor' => $cursor] : []);
         $request = JsonRpcMessage::request(self::newId(), 'resources/list', $params);
         $payload = $this->call($request);
@@ -229,11 +244,19 @@ class McpClient
         ));
 
         $nextCursor = $payload['nextCursor'] ?? null;
+        $meta = is_array($payload['_meta'] ?? null) ? $payload['_meta'] : [];
+        $ttl = $meta['cacheTtlSeconds'] ?? $meta['cache_ttl_seconds'] ?? null;
+        $ttlMs = $payload['ttlMs'] ?? null;
+        $cacheScope = $payload['cacheScope'] ?? null;
 
-        return [
-            'resources' => $resources,
-            'nextCursor' => is_string($nextCursor) ? $nextCursor : null,
-        ];
+        return new McpCatalogPage(
+            items: $resources,
+            nextCursor: is_string($nextCursor) ? $nextCursor : null,
+            cacheTtlSeconds: is_int($ttl) ? max(0, $ttl) : null,
+            ttlMs: is_int($ttlMs) ? max(0, $ttlMs) : null,
+            cacheScope: is_string($cacheScope) ? $cacheScope : null,
+            meta: $meta,
+        );
     }
 
     /**

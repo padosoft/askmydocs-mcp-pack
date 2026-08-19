@@ -34,6 +34,28 @@ class McpClientResourcesPromptsTest extends TestCase
         $this->assertSame('page2', $page['nextCursor']);
     }
 
+    public function test_list_resources_page_preserves_modern_cache_hints(): void
+    {
+        $transport = $this->modern(new StubMcpTransport);
+        $transport->responses['resources/list'] = [
+            'resources' => [['uri' => 'docs://guide']],
+            'nextCursor' => 'next',
+            'ttlMs' => 1500,
+            'cacheScope' => 'tenant',
+            '_meta' => ['cacheTtlSeconds' => 30, 'revision' => 'r1'],
+        ];
+        McpClient::useTransportResolver(fn () => $transport);
+
+        $page = McpClient::forServer($this->server())->listResourcesPage();
+
+        $this->assertSame('docs://guide', $page->items[0]['uri']);
+        $this->assertSame('next', $page->nextCursor);
+        $this->assertSame(30, $page->cacheTtlSeconds);
+        $this->assertSame(1500, $page->ttlMs);
+        $this->assertSame('tenant', $page->cacheScope);
+        $this->assertSame('r1', $page->meta['revision']);
+    }
+
     public function test_list_all_resources_drains_every_page(): void
     {
         $transport = $this->modern(new StubMcpTransport);
