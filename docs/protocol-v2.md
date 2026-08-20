@@ -20,7 +20,8 @@ Set `Accept: text/event-stream` for a streamed response. `subscriptions/listen` 
 Production requirements:
 
 - Use multiple stateless HTTP workers behind a normal load balancer; no sticky session is required.
-- Back cache/subscriptions/cancellation with a shared cache store, not per-worker array cache.
+- Back cache/subscriptions/cancellation with a shared cache store, not per-worker array cache. Prefer a driver with atomic locks (`redis`, `database`, `memcached`, `dynamodb`, `file`): the subscription broker serialises its append through the store lock so concurrent publishers never drop each other's notifications, and falls back to a best-effort append on drivers without lock support.
+- Dynamic catalog `upsert()`/`remove()` calls are process-local; apply them deterministically on every worker at boot (see the migration guide) rather than ad hoc on one worker.
 - Send trace context only through `traceparent`, `tracestate` and `baggage`; the package validates format/length and does not write those values to audit logs.
 - Run `mcp-pack:tasks:recover`, `mcp-pack:tasks:prune` and `mcp-pack:artifacts:prune` from Laravel Scheduler.
 - Never expose the legacy HTTP+SSE client transport as the v2 server route.

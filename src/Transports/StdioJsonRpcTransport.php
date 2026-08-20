@@ -121,6 +121,12 @@ class StdioJsonRpcTransport implements McpTransportContract
         if ($this->process?->isRunning()) {
             return $this->process;
         }
+        // Starting a replacement child: drop any partial line left over from a
+        // previous process that exited mid-message, otherwise those stale bytes
+        // would be glued in front of the new child's first response and make it
+        // unparsable. The old input stream (if any) is closed for the same reason.
+        $this->input?->close();
+        $this->buffer = '';
         $this->input = new InputStream;
         $this->process = $this->makeProcess();
         $this->process->setInput($this->input);
@@ -137,6 +143,10 @@ class StdioJsonRpcTransport implements McpTransportContract
     {
         $deadline = microtime(true) + $this->timeoutSeconds();
         do {
+            // Sample liveness BEFORE draining output: a child that answers and exits
+            // between the two calls has already flushed everything, so reading after
+            // the status check never loses its final line.
+            $running = $this->process?->isRunning() ?? false;
             $this->buffer .= $this->process?->getIncrementalOutput() ?? '';
             $lines = preg_split('/\r?\n/', $this->buffer) ?: [];
             $this->buffer = array_pop($lines) ?? '';
@@ -146,7 +156,7 @@ class StdioJsonRpcTransport implements McpTransportContract
                     return $response;
                 }
             }
-            if (! $this->process?->isRunning()) {
+            if (! $running) {
                 throw new McpTransportException('Stdio MCP transport exited before responding: '.($this->process?->getErrorOutput() ?? ''));
             }
             usleep(10_000);

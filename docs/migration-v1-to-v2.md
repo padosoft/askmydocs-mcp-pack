@@ -29,4 +29,6 @@ The client remains dual-era: it sends `server/discover` first and falls back onl
 | single-shot stdio | persistent stdio process |
 | HTTP JSON-RPC without routing headers | stateless Streamable HTTP with validated MCP headers |
 
-Dynamic changes go through `$manager->require($server)->forTenant($tenant, $principal)->upsert()` or `remove()`. They increment the scoped revision, invalidate its cache, publish `notifications/*/list_changed`, and never alter definitions already compiled for another tenant.
+Dynamic changes go through `$manager->require($server)->forTenant($tenant, $principal)->upsert()` or `remove()`. They increment the scoped revision, invalidate its cache, publish `notifications/*/list_changed`, and never alter definitions already compiled for another tenant. The principal is part of the scope only for `CacheScope::Private` servers; on public/no-store servers `forTenant($tenant, $principal)` normalises to the tenant-wide scope the request handler reads.
+
+Overlays and revisions are **process-local**: compiled definitions carry handlers (closures for synchronous tools) that cannot be serialised into a shared store, so dynamic mutations are not replicated across workers. When you run several stateless workers, apply the same mutations deterministically on every worker (from a service provider or a per-request middleware) so each computes the same overlays and revision; only the derived snapshot is shared through the cache, keyed by revision so workers on different revisions never overwrite each other.

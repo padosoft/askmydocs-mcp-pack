@@ -45,7 +45,7 @@ final readonly class McpRequest
     {
         $id = is_object($this->actor) && method_exists($this->actor, 'getAuthIdentifier')
             ? $this->actor->getAuthIdentifier()
-            : data_get($this->actor, 'id');
+            : data_get($this->actor, 'id', $this->actor); // scalar actors (e.g. 'alice') are kept, mirroring ToolInvoker
 
         return is_scalar($id) ? (string) $id : $this->principalId;
     }

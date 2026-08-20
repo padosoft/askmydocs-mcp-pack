@@ -25,7 +25,7 @@ final class JsonSchemaValidator
         $this->assertRefsAllowed($schema);
 
         $schemaObject = json_decode(json_encode($this->normaliseSchemaMaps($schema), JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
-        $instanceObject = json_decode(json_encode($instance === [] ? new \stdClass : $instance, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+        $instanceObject = json_decode(json_encode($instance === [] ? $this->emptyInstanceFor($schema) : $instance, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
         $validator = new Validator;
         if ($this->allowedRemoteHosts !== []) {
             $resolver = new SchemaResolver;
@@ -41,6 +41,25 @@ final class JsonSchemaValidator
 
         $formatted = (new ErrorFormatter)->format($result->error(), false);
         throw new \InvalidArgumentException('JSON Schema validation failed: '.json_encode($formatted, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+    }
+
+    /**
+     * An empty PHP array is ambiguous ({} vs []). Tool arguments and structured
+     * content are objects, so `{}` is the default — but when the schema only
+     * admits `array` at the root, a legitimate empty JSON array must stay `[]`.
+     *
+     * @param  array<string,mixed>  $schema
+     * @return array<never,never>|\stdClass
+     */
+    private function emptyInstanceFor(array $schema): array|\stdClass
+    {
+        $type = $schema['type'] ?? null;
+        $types = is_array($type) ? $type : [$type];
+        if (in_array('array', $types, true) && ! in_array('object', $types, true)) {
+            return [];
+        }
+
+        return new \stdClass;
     }
 
     private function assertWithinLimits(array $value, int $maxBytes, string $label): void
@@ -86,7 +105,7 @@ final class JsonSchemaValidator
         }
     }
 
-    private function normaliseSchemaMaps(mixed $node, ?string $key = null): mixed
+    private function normaliseSchemaMaps(mixed $node, ?string $key = null, bool $root = true): mixed
     {
         if (is_object($node)) {
             $node = get_object_vars($node);
@@ -94,13 +113,15 @@ final class JsonSchemaValidator
         if (! is_array($node)) {
             return $node;
         }
-        if ($node === [] && in_array($key, ['properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas'], true)) {
+        // Empty root schema ({} = "accept anything") and empty keyword maps must be
+        // encoded as JSON objects, never as `[]`.
+        if ($node === [] && ($root || in_array($key, ['properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas'], true))) {
             return new \stdClass;
         }
 
         $normalised = [];
         foreach ($node as $childKey => $value) {
-            $normalised[$childKey] = $this->normaliseSchemaMaps($value, is_string($childKey) ? $childKey : null);
+            $normalised[$childKey] = $this->normaliseSchemaMaps($value, is_string($childKey) ? $childKey : null, false);
         }
 
         return $normalised;

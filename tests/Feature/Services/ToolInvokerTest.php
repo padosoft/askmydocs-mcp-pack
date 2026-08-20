@@ -90,11 +90,16 @@ class ToolInvokerTest extends TestCase
         $this->assertSame(['00000000-0000-4000-8000-000000000002'], $row->artifact_ids);
 
         McpToolCallAudit::query()->delete();
-        $transport->responses['tools/call:secret'] = JsonRpcMessage::errorResponse('secret', -32000, 'Bearer top-secret token=my-token');
+        $transport->responses['tools/call:secret'] = JsonRpcMessage::errorResponse('secret', -32000, 'Bearer top-secret token=my-token access_token=ya29.oauth-at&refresh_token=1//0g-rt {"id_token":"eyJ.oauth-id","client_secret":"GOCSPX-cs"} api_key: k-123 token_count=12');
         (new ToolInvoker)->invoke($this->server(), 'secret', []);
         $excerpt = (string) McpToolCallAudit::query()->value('error_excerpt');
-        $this->assertStringNotContainsString('top-secret', $excerpt);
-        $this->assertStringNotContainsString('my-token', $excerpt);
+        foreach (['top-secret', 'my-token', 'ya29.oauth-at', '1//0g-rt', 'eyJ.oauth-id', 'GOCSPX-cs', 'k-123'] as $secret) {
+            $this->assertStringNotContainsString($secret, $excerpt);
+        }
+        // Names are kept (only values are redacted) and non-secret keys are untouched.
+        $this->assertStringContainsString('access_token=[REDACTED]', $excerpt);
+        $this->assertStringContainsString('"client_secret":"[REDACTED]"', $excerpt);
+        $this->assertStringContainsString('token_count=12', $excerpt);
     }
 
     private function server(): InMemoryMcpServer

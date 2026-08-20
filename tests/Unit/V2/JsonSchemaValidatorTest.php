@@ -31,6 +31,27 @@ final class JsonSchemaValidatorTest extends TestCase
         $this->addToAssertionCount(1);
     }
 
+    public function test_empty_instance_representation_follows_the_schema_type(): void
+    {
+        $validator = new JsonSchemaValidator;
+
+        // An empty PHP array is ambiguous ({} vs []); pick the shape the schema expects.
+        $validator->validate(['type' => 'array'], []);
+        $validator->validate(['type' => 'array', 'minItems' => 0], []);
+        $validator->validate(['type' => ['array', 'null']], []);
+        $validator->validate(['type' => 'object'], []);
+        $validator->validate(['type' => ['object', 'array']], []);
+        $validator->validate([], []);
+        $this->addToAssertionCount(6);
+
+        try {
+            $validator->validate(['type' => 'array', 'minItems' => 1], []);
+            $this->fail('An empty array must not satisfy minItems: 1.');
+        } catch (\InvalidArgumentException $e) {
+            $this->assertStringContainsString('JSON Schema validation failed', $e->getMessage());
+        }
+    }
+
     public function test_allowlisted_remote_ref_is_not_rejected_by_security_gate(): void
     {
         $validator = new JsonSchemaValidator(allowedRemoteHosts: ['127.0.0.1']);

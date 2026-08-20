@@ -167,7 +167,10 @@ class ToolInvoker
         $patterns = [
             '/\bBearer\s+[^\s,;]+/i' => 'Bearer [REDACTED]',
             '/\b(sk|pk|rk)_[A-Za-z0-9_-]{8,}\b/' => '[REDACTED_KEY]',
-            '/\b(token|api[_-]?key|password|secret)=([^\s&]+)/i' => '$1=[REDACTED]',
+            // key=value, key: value and "key":"value" shapes for token-ish names,
+            // including OAuth parameter names (access_token, refresh_token, id_token,
+            // client_secret) so an upstream OAuth error never lands in error_excerpt.
+            '/((?:[\w.-]*(?:token|secret|password|passwd|api[_-]?key|credential))\s*["\']?\s*[:=]\s*["\']?)([^\s&"\',;]+)/i' => '$1[REDACTED]',
         ];
 
         return mb_substr((string) preg_replace(array_keys($patterns), array_values($patterns), $error), 0, 500);

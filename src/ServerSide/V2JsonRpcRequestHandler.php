@@ -65,7 +65,9 @@ final class V2JsonRpcRequestHandler implements JsonRpcRequestHandlerContract
             $meta = $this->validateMeta($message->params ?? []);
             $serverId = (string) ($context['server_id'] ?? config('mcp-pack.v2.default_server', 'default'));
             $server = $this->manager->resolveLocal($serverId) ?? $this->manager->require($serverId);
-            $principal = $server->server->cacheScope->value === 'private' ? ($context['principal_id'] ?? null) : null;
+            // The catalog itself keeps the principal in scope only for private-cache
+            // servers (see ServerCatalog::forTenant()), so pass it through unchanged.
+            $principal = $context['principal_id'] ?? null;
             $catalog = $server->forTenant($context['tenant_id'] ?? null, is_string($principal) ? $principal : null);
             $request = $this->makeRequest($message, $meta, $context, $correlationId);
 

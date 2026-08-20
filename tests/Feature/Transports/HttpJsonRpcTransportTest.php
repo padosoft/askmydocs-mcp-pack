@@ -46,6 +46,31 @@ class HttpJsonRpcTransportTest extends TestCase
         $transport->request(JsonRpcMessage::request(1, 'tools/list'));
     }
 
+    public function test_notify_throws_on_non_2xx(): void
+    {
+        Http::fake([
+            'gateway.example.test/rpc' => Http::response('rejected', 401),
+        ]);
+
+        $transport = new HttpJsonRpcTransport(['endpoint' => 'http://gateway.example.test/rpc']);
+
+        $this->expectException(McpTransportException::class);
+        $this->expectExceptionMessageMatches('/HTTP MCP transport notify returned status 401/');
+        $transport->notify(JsonRpcMessage::notification('notifications/initialized'));
+    }
+
+    public function test_notify_accepts_2xx_including_202(): void
+    {
+        Http::fake([
+            'gateway.example.test/rpc' => Http::response('', 202),
+        ]);
+
+        $transport = new HttpJsonRpcTransport(['endpoint' => 'http://gateway.example.test/rpc']);
+        $transport->notify(JsonRpcMessage::notification('notifications/initialized'));
+
+        $this->assertSame(202, $transport->lastStatusCode());
+    }
+
     public function test_request_throws_on_non_json_payload(): void
     {
         Http::fake([

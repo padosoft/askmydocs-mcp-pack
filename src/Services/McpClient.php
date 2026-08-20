@@ -8,6 +8,7 @@ use Padosoft\AskMyDocsMcpPack\Contracts\McpTransportContract;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpProtocolNegotiationException;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpRemoteErrorException;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpTransportException;
+use Padosoft\AskMyDocsMcpPack\Protocol\ProtocolVersion;
 use Padosoft\AskMyDocsMcpPack\Support\JsonRpcMessage;
 use Padosoft\AskMyDocsMcpPack\Support\McpCatalogPage;
 use Padosoft\AskMyDocsMcpPack\Support\McpNegotiationResult;
@@ -31,18 +32,14 @@ use Padosoft\AskMyDocsMcpPack\Transports\StdioJsonRpcTransport;
  */
 class McpClient
 {
-    public const MODERN_PROTOCOL_VERSION = '2026-07-28';
+    // Derived from ProtocolVersion so the advertised list and the negotiation
+    // loop below can never disagree.
+    public const MODERN_PROTOCOL_VERSION = ProtocolVersion::V2;
 
-    public const LATEST_LEGACY_PROTOCOL_VERSION = '2025-11-25';
+    public const LATEST_LEGACY_PROTOCOL_VERSION = ProtocolVersion::CLIENT_FALLBACKS[0];
 
     /** @var list<string> */
-    public const SUPPORTED_LEGACY_PROTOCOL_VERSIONS = [
-        '2025-11-25',
-        '2025-06-18',
-        '2025-03-26',
-        '2024-11-05',
-        '2024-10-07',
-    ];
+    public const SUPPORTED_LEGACY_PROTOCOL_VERSIONS = ProtocolVersion::CLIENT_FALLBACKS;
 
     private ?McpNegotiationResult $negotiation = null;
 
