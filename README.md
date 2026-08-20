@@ -15,6 +15,13 @@
 > Contracts, multi-turn tool-calling orchestrator, stdio + HTTP transports, audit trail, RBAC hooks.
 > Powers [AskMyDocs](https://github.com/lopadova/AskMyDocs) and reusable in any Laravel AI app.
 
+This is the protocol/runtime package, not AskMyDocs's product connection
+manager. It owns MCP wire compatibility, transports, normalized results and
+server primitives. Shared and personal connections, encrypted OAuth accounts,
+project binding, catalogue governance and the Connected Apps UI belong to
+`padosoft/askmydocs-connector-mcp`, which consumes this package. Keeping that
+boundary avoids two independent connection registries.
+
 ## Version 2: Fluent, stateless MCP
 
 Version 2 makes the autonomous Fluent API the primary server surface and speaks MCP `2026-07-28` only. It has no `initialize` handshake or server session: every request carries namespaced protocol metadata, every result carries `resultType` and `serverInfo`, and HTTP routing is validated from `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` and schema-authorized `Mcp-Param-*` headers.
