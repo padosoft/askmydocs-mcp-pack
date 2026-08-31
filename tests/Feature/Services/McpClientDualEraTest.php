@@ -7,12 +7,34 @@ use Padosoft\AskMyDocsMcpPack\Defaults\InMemoryMcpServer;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpTransportException;
 use Padosoft\AskMyDocsMcpPack\Services\McpClient;
 use Padosoft\AskMyDocsMcpPack\Support\JsonRpcMessage;
+use Padosoft\AskMyDocsMcpPack\Support\McpNegotiationResult;
 use Padosoft\AskMyDocsMcpPack\Support\McpProtocolEra;
 use Padosoft\AskMyDocsMcpPack\Tests\Support\StubMcpTransport;
 use Padosoft\AskMyDocsMcpPack\Tests\TestCase;
 
 class McpClientDualEraTest extends TestCase
 {
+    public function test_recent_modern_negotiation_can_be_reused_without_discovery(): void
+    {
+        $transport = new StubMcpTransport;
+        $transport->scriptToolCall('search', ['structuredContent' => ['items' => []]]);
+        $client = new McpClient($this->server(), $transport);
+
+        $client->useNegotiation(new McpNegotiationResult(
+            McpProtocolEra::Modern,
+            McpClient::MODERN_PROTOCOL_VERSION,
+            ['tools' => []],
+            ['name' => 'cached-server'],
+        ));
+        $client->callToolResult('search', []);
+
+        $this->assertSame(['tools/call'], array_map(
+            static fn (JsonRpcMessage $message): ?string => $message->method,
+            $transport->sentRequests,
+        ));
+        $this->assertSame(1, $client->physicalRequestCount());
+    }
+
     public function test_modern_discovery_is_stateless_and_adds_per_request_meta(): void
     {
         $transport = new StubMcpTransport;
@@ -44,6 +66,7 @@ class McpClientDualEraTest extends TestCase
             static fn (JsonRpcMessage $message): ?string => $message->method,
             $transport->sentRequests,
         ));
+        $this->assertSame(2, $client->physicalRequestCount());
     }
 
     public function test_method_not_found_falls_back_to_latest_legacy_initialize(): void

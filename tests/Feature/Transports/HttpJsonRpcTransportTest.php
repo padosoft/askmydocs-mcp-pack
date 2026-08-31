@@ -3,6 +3,7 @@
 namespace Padosoft\AskMyDocsMcpPack\Tests\Feature\Transports;
 
 use Illuminate\Support\Facades\Http;
+use Padosoft\AskMyDocsMcpPack\Exceptions\McpAuthorizationException;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpTransportException;
 use Padosoft\AskMyDocsMcpPack\Support\JsonRpcMessage;
 use Padosoft\AskMyDocsMcpPack\Support\McpProtocolEra;
@@ -11,6 +12,49 @@ use Padosoft\AskMyDocsMcpPack\Transports\HttpJsonRpcTransport;
 
 class HttpJsonRpcTransportTest extends TestCase
 {
+    public function test_authentication_failures_are_typed_without_exposing_response_body(): void
+    {
+        Http::fake(['gateway.example.test/rpc' => Http::response('secret login page', 401)]);
+        $transport = new HttpJsonRpcTransport(['endpoint' => 'http://gateway.example.test/rpc']);
+
+        try {
+            $transport->request(JsonRpcMessage::request(1, 'tools/list'));
+            $this->fail('Expected authorization failure.');
+        } catch (McpAuthorizationException $e) {
+            $this->assertSame(401, $e->httpStatus);
+            $this->assertStringContainsString('reauthorization', $e->getMessage());
+            $this->assertStringNotContainsString('secret login page', $e->getMessage());
+        }
+    }
+
+    public function test_oauth_payload_and_challenge_are_classified_before_json_rpc_decode(): void
+    {
+        Http::fake(['gateway.example.test/rpc' => Http::response(
+            ['error' => 'invalid_token', 'error_description' => 'expired'],
+            401,
+            ['WWW-Authenticate' => 'Bearer realm="mcp", error="invalid_token"'],
+        )]);
+        $transport = new HttpJsonRpcTransport(['endpoint' => 'http://gateway.example.test/rpc']);
+
+        try {
+            $transport->request(JsonRpcMessage::request(1, 'tools/list'));
+            $this->fail('Expected authorization failure.');
+        } catch (McpAuthorizationException $e) {
+            $this->assertSame('invalid_token', $e->oauthError);
+            $this->assertSame('Bearer realm="mcp", error="invalid_token"', $e->wwwAuthenticate);
+        }
+    }
+
+    public function test_json_object_without_json_rpc_envelope_is_rejected(): void
+    {
+        Http::fake(['gateway.example.test/rpc' => Http::response(['data' => ['items' => []]], 200)]);
+        $transport = new HttpJsonRpcTransport(['endpoint' => 'http://gateway.example.test/rpc']);
+
+        $this->expectException(McpTransportException::class);
+        $this->expectExceptionMessage('invalid JSON-RPC response envelope');
+        $transport->request(JsonRpcMessage::request(1, 'tools/list'));
+    }
+
     public function test_request_round_trip_parses_response(): void
     {
         Http::fake([
@@ -31,6 +75,8 @@ class HttpJsonRpcTransportTest extends TestCase
 
         $this->assertTrue($response->isResponse());
         $this->assertSame(['ok' => true], $response->result);
+        $this->assertSame('tools/list', $transport->requestMetrics()[0]['method']);
+        $this->assertSame(200, $transport->requestMetrics()[0]['status']);
     }
 
     public function test_request_throws_on_non_2xx(): void
@@ -54,8 +100,8 @@ class HttpJsonRpcTransportTest extends TestCase
 
         $transport = new HttpJsonRpcTransport(['endpoint' => 'http://gateway.example.test/rpc']);
 
-        $this->expectException(McpTransportException::class);
-        $this->expectExceptionMessageMatches('/HTTP MCP transport notify returned status 401/');
+        $this->expectException(McpAuthorizationException::class);
+        $this->expectExceptionMessageMatches('/authorization was rejected \(HTTP 401\)/');
         $transport->notify(JsonRpcMessage::notification('notifications/initialized'));
     }
 

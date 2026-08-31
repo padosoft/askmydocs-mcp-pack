@@ -45,6 +45,8 @@ class McpClient
 
     private bool $sessionRecoveryAttempted = false;
 
+    private int $physicalRequestCount = 0;
+
     public function __construct(
         protected readonly McpServerContract $server,
         protected readonly McpTransportContract $transport,
@@ -103,7 +105,7 @@ class McpClient
             'server/discover',
             ['_meta' => $this->requestMeta(), 'clientInfo' => $this->clientInfo()],
         );
-        $response = $this->transport->request($request);
+        $response = $this->request($request);
 
         if ($response->isError()) {
             if ($mode === 'auto' && $this->isUnsupportedModernResponse($response)) {
@@ -449,6 +451,28 @@ class McpClient
         return $this->negotiation;
     }
 
+    /**
+     * Reuse a recent stateless modern negotiation persisted by the host.
+     * Legacy negotiations carry session state and therefore cannot be seeded.
+     */
+    public function useNegotiation(McpNegotiationResult $negotiation): self
+    {
+        if ($negotiation->era !== McpProtocolEra::Modern
+            || $negotiation->protocolVersion !== self::MODERN_PROTOCOL_VERSION) {
+            throw new \InvalidArgumentException('Only the current stateless modern MCP negotiation may be reused.');
+        }
+
+        $this->configureTransport($negotiation->era, $negotiation->protocolVersion);
+        $this->negotiation = $negotiation;
+
+        return $this;
+    }
+
+    public function physicalRequestCount(): int
+    {
+        return $this->physicalRequestCount;
+    }
+
     /** @return array<string,mixed> */
     protected function call(JsonRpcMessage $request): array
     {
@@ -457,14 +481,14 @@ class McpClient
         }
 
         try {
-            $response = $this->transport->request($request);
+            $response = $this->request($request);
         } catch (McpTransportException $e) {
             if (! $this->canRecoverExpiredSession()) {
                 throw $e;
             }
 
             $this->recoverLegacySession();
-            $response = $this->transport->request($this->rebuildForCurrentProtocol($request));
+            $response = $this->request($this->rebuildForCurrentProtocol($request));
         }
 
         if ($response->isError()) {
@@ -491,7 +515,7 @@ class McpClient
             'capabilities' => ['tools' => new \stdClass],
             'clientInfo' => $this->clientInfo(),
         ]);
-        $response = $this->transport->request($request);
+        $response = $this->request($request);
         if ($response->isError()) {
             throw $this->exceptionFor($response, 'Legacy MCP initialization failed');
         }
@@ -508,7 +532,7 @@ class McpClient
         }
 
         $this->configureTransport(McpProtocolEra::Legacy, $version);
-        $this->transport->notify(JsonRpcMessage::notification('notifications/initialized'));
+        $this->notify(JsonRpcMessage::notification('notifications/initialized'));
         $this->sessionRecoveryAttempted = false;
 
         return $this->negotiation = new McpNegotiationResult(
@@ -579,6 +603,19 @@ class McpClient
         if ($this->transport instanceof McpProtocolAwareTransportContract) {
             $this->transport->useProtocol($era, $version);
         }
+    }
+
+    private function request(JsonRpcMessage $request): JsonRpcMessage
+    {
+        $this->physicalRequestCount++;
+
+        return $this->transport->request($request);
+    }
+
+    private function notify(JsonRpcMessage $notification): void
+    {
+        $this->physicalRequestCount++;
+        $this->transport->notify($notification);
     }
 
     private function isUnsupportedModernResponse(JsonRpcMessage $response): bool
