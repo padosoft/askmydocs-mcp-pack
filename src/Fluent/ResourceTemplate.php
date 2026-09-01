@@ -22,9 +22,7 @@ final class ResourceTemplate
 
     private function __construct(private readonly string $uriTemplate)
     {
-        if (! str_contains($uriTemplate, '{')) {
-            throw new \InvalidArgumentException('A resource template must contain at least one {variable}.');
-        }
+        $this->assertValidUriTemplate($uriTemplate);
     }
 
     public static function make(string $uriTemplate): self
@@ -83,5 +81,32 @@ final class ResourceTemplate
         }
 
         return new ResourceTemplateDefinition($this->uriTemplate, $this->name ?? $this->uriTemplate, $this->description, $this->mimeType, $this->handler, $this->annotations, $this->meta);
+    }
+
+    private function assertValidUriTemplate(string $template): void
+    {
+        if (preg_match('/^[a-z][a-z0-9+.-]*:\S+$/i', $template) !== 1) {
+            throw new \InvalidArgumentException('A resource template must be an absolute URI template.');
+        }
+        preg_match_all('/\{([^{}]*)\}/', $template, $matches);
+        if (($matches[0] ?? []) === []) {
+            throw new \InvalidArgumentException('A resource template must contain at least one non-empty expression.');
+        }
+        $literal = preg_replace('/\{[^{}]*\}/', '', $template);
+        if (! is_string($literal) || str_contains($literal, '{') || str_contains($literal, '}')) {
+            throw new \InvalidArgumentException('A resource template contains unbalanced braces.');
+        }
+        $varName = '(?:[a-zA-Z0-9_]|%[a-fA-F0-9]{2})+(?:\.(?:[a-zA-Z0-9_]|%[a-fA-F0-9]{2})+)*';
+        foreach ($matches[1] as $expression) {
+            $body = preg_replace('/^[+#.\/;?&]/', '', (string) $expression);
+            if (! is_string($body) || $body === '') {
+                throw new \InvalidArgumentException('A resource template contains an empty expression.');
+            }
+            foreach (explode(',', $body) as $variable) {
+                if (preg_match('/^'.$varName.'(?::[1-9][0-9]{0,3}|\*)?$/', $variable) !== 1) {
+                    throw new \InvalidArgumentException('A resource template contains an invalid variable expression.');
+                }
+            }
+        }
     }
 }

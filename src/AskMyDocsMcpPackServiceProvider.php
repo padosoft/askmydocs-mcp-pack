@@ -51,6 +51,7 @@ use Padosoft\AskMyDocsMcpPack\Http\Admin\V2\AdminController as AdminV2Controller
 use Padosoft\AskMyDocsMcpPack\Http\Admin\V2\OpenApiController as OpenApiV2Controller;
 use Padosoft\AskMyDocsMcpPack\Http\V2\ArtifactDownloadController;
 use Padosoft\AskMyDocsMcpPack\Http\V2\McpStreamableHttpController;
+use Padosoft\AskMyDocsMcpPack\Http\V2\Middleware\RequireAdminIdentity;
 use Padosoft\AskMyDocsMcpPack\Http\V2\Middleware\ValidateOAuthResourceRequest;
 use Padosoft\AskMyDocsMcpPack\Http\V2\OAuthProtectedResourceController;
 use Padosoft\AskMyDocsMcpPack\Protocol\CursorCodec;
@@ -467,7 +468,9 @@ class AskMyDocsMcpPackServiceProvider extends ServiceProvider
         if (! (bool) config('mcp-pack.admin_v2.enabled', false)) {
             return;
         }
-        Route::middleware((array) config('mcp-pack.admin_v2.middleware', ['api']))
+        $middleware = (array) config('mcp-pack.admin_v2.middleware', ['api']);
+        $middleware[] = RequireAdminIdentity::class;
+        Route::middleware(array_values(array_unique($middleware)))
             ->prefix((string) config('mcp-pack.admin_v2.prefix', 'api/admin/mcp-pack/v2'))
             ->group(function (): void {
                 Route::get('capabilities', [AdminV2Controller::class, 'capabilities']);

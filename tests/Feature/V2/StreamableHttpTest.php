@@ -2,6 +2,7 @@
 
 namespace Padosoft\AskMyDocsMcpPack\Tests\Feature\V2;
 
+use Padosoft\AskMyDocsMcpPack\Contracts\V2\SubscriptionBrokerContract;
 use Padosoft\AskMyDocsMcpPack\Fluent\McpManager;
 use Padosoft\AskMyDocsMcpPack\Fluent\Tool;
 use Padosoft\AskMyDocsMcpPack\Protocol\McpRequest;
@@ -64,6 +65,31 @@ final class StreamableHttpTest extends TestCase
         $this->assertNotFalse($terminal);
         $this->assertLessThan($terminal, $progress);
         $this->assertStringContainsString('halfway', $stream);
+    }
+
+    public function test_wildcard_accept_header_does_not_implicitly_enable_sse(): void
+    {
+        $response = $this->postJson('/mcp', $this->payload('server/discover'), [
+            'Accept' => '*/*',
+            'MCP-Protocol-Version' => '2026-07-28',
+            'Mcp-Method' => 'server/discover',
+        ])->assertOk();
+
+        $this->assertStringStartsWith('application/json', (string) $response->headers->get('Content-Type'));
+    }
+
+    public function test_empty_subscription_poll_preserves_the_requested_cursor(): void
+    {
+        $broker = $this->app->make(SubscriptionBrokerContract::class);
+        $broker->publish(null, 'notifications/resources/list_changed', ['revision' => 1]);
+        $cursor = $broker->listen(null)[0]['id'];
+
+        $this->postJson('/mcp', $this->payload('subscriptions/listen', ['after' => $cursor]), [
+            'MCP-Protocol-Version' => '2026-07-28',
+            'Mcp-Method' => 'subscriptions/listen',
+        ])->assertOk()
+            ->assertJsonPath('result.events', [])
+            ->assertJsonPath('result.lastEventId', $cursor);
     }
 
     /** @param array<string,mixed> $params @return array<string,mixed> */

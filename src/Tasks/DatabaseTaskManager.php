@@ -133,9 +133,10 @@ final class DatabaseTaskManager implements TaskManagerContract
     public function run(string $uuid): void
     {
         $lease = (string) Str::uuid();
+        $leaseSeconds = $this->leaseSeconds();
         $claimed = McpTask::query()->whereKey($uuid)->where('state', TaskStatus::Working->value)->where('cancel_requested', false)->where('expires_at', '>', now())
             ->where(fn ($query) => $query->whereNull('lease_expires_at')->orWhere('lease_expires_at', '<=', now()))
-            ->update(['lease_owner' => $lease, 'lease_expires_at' => now()->addSeconds((int) config('mcp-pack.tasks.lease_seconds', 300)), 'updated_at' => now()]);
+            ->update(['lease_owner' => $lease, 'lease_expires_at' => now()->addSeconds($leaseSeconds), 'updated_at' => now()]);
         if ($claimed !== 1) {
             return;
         }
@@ -153,10 +154,19 @@ final class DatabaseTaskManager implements TaskManagerContract
             traceparent: is_string($payload['traceparent'] ?? null) ? $payload['traceparent'] : null,
             tracestate: is_string($payload['tracestate'] ?? null) ? $payload['tracestate'] : null,
             baggage: is_string($payload['baggage'] ?? null) ? $payload['baggage'] : null,
-            signals: new RequestSignals($this->subscriptions, $this->cancellations, $task->tenant_id, $task->actor_id, (string) $task->getKey()),
+            signals: new RequestSignals(
+                $this->subscriptions,
+                $this->cancellations,
+                $task->tenant_id,
+                $task->actor_id,
+                (string) $task->getKey(),
+                heartbeat: fn (): bool => $this->renewLease($task, $lease, $leaseSeconds),
+            ),
         );
         try {
+            $this->renewLease($task, $lease, $leaseSeconds);
             $result = McpResult::normalise($this->invoker->invoke((string) $task->handler, $request));
+            $this->renewLease($task, $lease, $leaseSeconds);
             if (is_array($task->output_schema)) {
                 if (! is_array($result['structuredContent'] ?? null)) {
                     throw new \RuntimeException('Task result omitted required structuredContent.');
@@ -190,7 +200,7 @@ final class DatabaseTaskManager implements TaskManagerContract
             $caster->setAttribute($key, $value);
             $encoded[$key] = $caster->getAttributes()[$key] ?? null;
         }
-        $updated = McpTask::query()->whereKey($task->getKey())->where('state', TaskStatus::Working->value)->where('cancel_requested', false)->where('lock_version', $task->lock_version)
+        $updated = McpTask::query()->whereKey($task->getKey())->where('state', TaskStatus::Working->value)->where('cancel_requested', false)->where('lock_version', $task->lock_version)->where('lease_owner', $task->lease_owner)
             ->update($encoded + ['state' => $status->value, 'lock_version' => $task->lock_version + 1, 'lease_owner' => null, 'lease_expires_at' => null, 'updated_at' => now()]);
         if ($updated === 1) {
             $fresh = $task->fresh();
@@ -219,6 +229,26 @@ final class DatabaseTaskManager implements TaskManagerContract
             });
 
         return $count;
+    }
+
+    private function renewLease(McpTask $task, string $lease, int $leaseSeconds): bool
+    {
+        $renewed = McpTask::query()
+            ->whereKey($task->getKey())
+            ->where('state', TaskStatus::Working->value)
+            ->where('cancel_requested', false)
+            ->where('lease_owner', $lease)
+            ->update(['lease_expires_at' => now()->addSeconds($leaseSeconds), 'updated_at' => now()]);
+        if ($renewed !== 1) {
+            throw new \RuntimeException('MCP task lease was lost while the handler was active.');
+        }
+
+        return true;
+    }
+
+    private function leaseSeconds(): int
+    {
+        return max(30, (int) config('mcp-pack.tasks.lease_seconds', 300));
     }
 
     /** @return Builder<McpTask> */

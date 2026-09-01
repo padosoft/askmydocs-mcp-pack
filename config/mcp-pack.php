@@ -255,6 +255,7 @@ return [
         'ttl_seconds' => (int) env('MCP_PACK_TASK_TTL', 86400),
         'poll_interval_ms' => (int) env('MCP_PACK_TASK_POLL_INTERVAL_MS', 1000),
         'lease_seconds' => (int) env('MCP_PACK_TASK_LEASE_SECONDS', 300),
+        'lease_safety_seconds' => (int) env('MCP_PACK_TASK_LEASE_SAFETY_SECONDS', 30),
     ],
 
     'subscriptions' => [
@@ -295,6 +296,9 @@ return [
     'admin_v2' => [
         'enabled' => env('MCP_PACK_ADMIN_V2_ENABLED', false),
         'prefix' => env('MCP_PACK_ADMIN_V2_PREFIX', 'api/admin/mcp-pack/v2'),
+        // Host authentication / authorization belongs before the package's
+        // final fail-closed identity guard. The default `api` group alone does
+        // not authenticate callers, so anonymous requests remain forbidden.
         'middleware' => array_values(array_filter(array_map('trim', explode(',', (string) env('MCP_PACK_ADMIN_V2_MIDDLEWARE', 'api'))))),
     ],
 

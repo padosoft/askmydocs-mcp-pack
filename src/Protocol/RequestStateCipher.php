@@ -17,7 +17,7 @@ final readonly class RequestStateCipher
             'tenant' => $request->tenantId,
             'actor' => $request->actorId(),
             'method' => $request->method,
-            'digest' => hash('sha256', json_encode($arguments, JSON_THROW_ON_ERROR)),
+            'digest' => $this->digest($arguments),
             'nonce' => (string) Str::uuid(),
             'expiresAt' => now()->addSeconds($ttlSeconds)->getTimestamp(),
             'singleUse' => $singleUse,
@@ -51,7 +51,7 @@ final readonly class RequestStateCipher
         $matches = hash_equals((string) $payload['tenant'], (string) $tenantId)
             && hash_equals((string) $payload['actor'], (string) $actorId)
             && hash_equals((string) $payload['method'], $method)
-            && hash_equals((string) $payload['digest'], hash('sha256', json_encode($arguments, JSON_THROW_ON_ERROR)));
+            && hash_equals((string) $payload['digest'], $this->digest($arguments));
         if (! $matches) {
             throw new \InvalidArgumentException('requestState does not match this tenant, actor, method or request.');
         }
@@ -64,5 +64,31 @@ final readonly class RequestStateCipher
         }
 
         return $payload;
+    }
+
+    /** @param array<string,mixed> $arguments */
+    private function digest(array $arguments): string
+    {
+        return hash('sha256', json_encode($this->canonicalize($arguments), JSON_THROW_ON_ERROR));
+    }
+
+    private function canonicalize(mixed $value): mixed
+    {
+        if (is_object($value)) {
+            $value = get_object_vars($value);
+        }
+        if (! is_array($value)) {
+            return $value;
+        }
+        if (array_is_list($value)) {
+            return array_map(fn (mixed $item): mixed => $this->canonicalize($item), $value);
+        }
+
+        ksort($value, SORT_STRING);
+        foreach ($value as $key => $item) {
+            $value[$key] = $this->canonicalize($item);
+        }
+
+        return $value;
     }
 }

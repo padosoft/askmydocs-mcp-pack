@@ -376,9 +376,10 @@ final class V2JsonRpcRequestHandler implements JsonRpcRequestHandlerContract
     /** @param array<string,mixed> $serverInfo */
     private function listen(McpRequest $request, array $serverInfo): array
     {
-        $events = $this->subscriptions->listen($request->tenantId, is_string($request->arguments['after'] ?? null) ? $request->arguments['after'] : null, (int) ($request->arguments['limit'] ?? 100), $request->principalId);
+        $after = is_string($request->arguments['after'] ?? null) ? $request->arguments['after'] : null;
+        $events = $this->subscriptions->listen($request->tenantId, $after, (int) ($request->arguments['limit'] ?? 100), $request->principalId);
 
-        return ['resultType' => 'complete', 'serverInfo' => $serverInfo, 'events' => $events, 'lastEventId' => $events === [] ? null : $events[array_key_last($events)]['id']];
+        return ['resultType' => 'complete', 'serverInfo' => $serverInfo, 'events' => $events, 'lastEventId' => $events === [] ? $after : $events[array_key_last($events)]['id']];
     }
 
     /** @param array<string,mixed> $serverInfo */

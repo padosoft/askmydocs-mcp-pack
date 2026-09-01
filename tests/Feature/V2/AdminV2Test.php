@@ -5,6 +5,7 @@ namespace Padosoft\AskMyDocsMcpPack\Tests\Feature\V2;
 use Illuminate\Support\Facades\Storage;
 use Padosoft\AskMyDocsMcpPack\Contracts\V2\TaskManagerContract;
 use Padosoft\AskMyDocsMcpPack\Protocol\McpRequest;
+use Padosoft\AskMyDocsMcpPack\Tests\Support\InjectMcpIdentityMiddleware;
 use Padosoft\AskMyDocsMcpPack\Tests\Support\InputRequiredTaskHandler;
 use Padosoft\AskMyDocsMcpPack\Tests\TestCase;
 
@@ -14,7 +15,7 @@ final class AdminV2Test extends TestCase
     {
         parent::defineEnvironment($app);
         $app['config']->set('mcp-pack.admin_v2.enabled', true);
-        $app['config']->set('mcp-pack.admin_v2.middleware', []);
+        $app['config']->set('mcp-pack.admin_v2.middleware', [InjectMcpIdentityMiddleware::class]);
     }
 
     protected function setUp(): void
@@ -42,7 +43,7 @@ final class AdminV2Test extends TestCase
         config()->set('mcp-pack.tasks.enabled', true);
         $task = $this->app->make(TaskManagerContract::class)->create(
             InputRequiredTaskHandler::class,
-            new McpRequest('tools/call', [], null, null, null, [], [], []),
+            new McpRequest('tools/call', [], 'acme', null, 'admin-1', [], [], []),
         )->fresh();
 
         $this->postJson('/api/admin/mcp-pack/v2/tasks/'.$task->getKey().'/input', [

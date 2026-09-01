@@ -3,6 +3,7 @@
 namespace Padosoft\AskMyDocsMcpPack\Tests\Unit\V2;
 
 use Padosoft\AskMyDocsMcpPack\Fluent\Resource;
+use Padosoft\AskMyDocsMcpPack\Fluent\ResourceTemplate;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -48,5 +49,39 @@ final class FluentResourceUriTest extends TestCase
         $this->expectExceptionMessage('absolute URI');
 
         Resource::make($uri);
+    }
+
+    /** @return iterable<string,array{0:string}> */
+    public static function validTemplates(): iterable
+    {
+        yield ['docs://catalog/{slug}'];
+        yield ['https://example.test{/path*}{?locale,limit}'];
+        yield ['urn:orders:{order_id}'];
+    }
+
+    #[DataProvider('validTemplates')]
+    public function test_absolute_rfc6570_resource_templates_are_accepted(string $template): void
+    {
+        $definition = ResourceTemplate::make($template)->handle(static fn (): string => 'x')->compile();
+
+        $this->assertSame($template, $definition->uriTemplate);
+    }
+
+    /** @return iterable<string,array{0:string}> */
+    public static function invalidTemplates(): iterable
+    {
+        yield 'unclosed expression' => ['docs://catalog/{slug'];
+        yield 'empty expression' => ['docs://catalog/{}'];
+        yield 'relative template' => ['/catalog/{slug}'];
+        yield 'invalid variable' => ['docs://catalog/{bad variable}'];
+        yield 'no expression' => ['docs://catalog/static'];
+    }
+
+    #[DataProvider('invalidTemplates')]
+    public function test_malformed_resource_templates_are_rejected(string $template): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        ResourceTemplate::make($template);
     }
 }

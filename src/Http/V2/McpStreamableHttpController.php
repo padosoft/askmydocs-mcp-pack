@@ -62,7 +62,7 @@ final class McpStreamableHttpController
             'tracestate' => $this->traceHeader($request->header('tracestate'), '/^[\x20-\x7E]*$/', 512),
             'baggage' => $this->traceHeader($request->header('baggage'), '/^[\x20-\x7E]*$/', 8192),
         ];
-        if ($request->accepts('text/event-stream')) {
+        if ($this->explicitlyAcceptsEventStream($request)) {
             $isSubscription = $message->method === 'subscriptions/listen';
 
             return new StreamedResponse(function () use ($message, $context, $isSubscription, $identity): void {
@@ -104,6 +104,25 @@ final class McpStreamableHttpController
         }
 
         return new JsonResponse($response->toArray(), $this->statusFor($response), ['Cache-Control' => 'no-store']);
+    }
+
+    private function explicitlyAcceptsEventStream(Request $request): bool
+    {
+        foreach (explode(',', (string) $request->header('Accept', '')) as $range) {
+            $parts = array_map('trim', explode(';', $range));
+            if (strtolower((string) array_shift($parts)) !== 'text/event-stream') {
+                continue;
+            }
+            foreach ($parts as $parameter) {
+                if (preg_match('/^q\s*=\s*0(?:\.0*)?$/i', $parameter) === 1) {
+                    continue 2;
+                }
+            }
+
+            return true;
+        }
+
+        return false;
     }
 
     private function validateNameHeader(Request $request, JsonRpcMessage $message): ?JsonResponse

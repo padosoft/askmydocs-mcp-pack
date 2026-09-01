@@ -122,4 +122,15 @@ final class TaskManagerTest extends TestCase
         $this->assertSame(1, $manager->prune());
         $this->assertSame(0, $manager->prune());
     }
+
+    public function test_worker_timeout_stays_safely_below_the_recovery_lease(): void
+    {
+        config()->set('mcp-pack.tasks.lease_seconds', 90);
+        config()->set('mcp-pack.tasks.lease_safety_seconds', 15);
+
+        $job = new RunMcpTask('task-1');
+
+        $this->assertSame(75, $job->timeout);
+        $this->assertTrue($job->failOnTimeout);
+    }
 }
