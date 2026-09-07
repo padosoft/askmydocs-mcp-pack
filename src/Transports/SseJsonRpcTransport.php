@@ -3,10 +3,12 @@
 namespace Padosoft\AskMyDocsMcpPack\Transports;
 
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
-use Padosoft\AskMyDocsMcpPack\Contracts\McpTransportContract;
+use Padosoft\AskMyDocsMcpPack\Contracts\McpProtocolAwareTransportContract;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpTransportException;
 use Padosoft\AskMyDocsMcpPack\Support\JsonRpcMessage;
+use Padosoft\AskMyDocsMcpPack\Support\McpProtocolEra;
 
 /**
  * JSON-RPC over HTTPS with Server-Sent Events (SSE) responses — the
@@ -35,8 +37,19 @@ use Padosoft\AskMyDocsMcpPack\Support\JsonRpcMessage;
  * {@see HttpJsonRpcTransport}. SSE framing is parsed in-process from
  * the raw response body.
  */
-final class SseJsonRpcTransport implements McpTransportContract
+final class SseJsonRpcTransport implements McpProtocolAwareTransportContract
 {
+    private ?McpProtocolEra $protocolEra = null;
+
+    private ?string $protocolVersion = null;
+
+    private ?string $sessionId = null;
+
+    private ?int $lastStatusCode = null;
+
+    /** @var array<string,list<string>> */
+    private array $lastResponseHeaders = [];
+
     /** @param array<string,mixed> $config */
     public function __construct(private readonly array $config) {}
 
@@ -47,8 +60,10 @@ final class SseJsonRpcTransport implements McpTransportContract
         }
 
         try {
+            $this->guardEndpoint();
             $response = Http::timeout($this->timeoutSeconds())
-                ->withHeaders($this->headers() + [
+                ->withOptions(['allow_redirects' => false])
+                ->withHeaders($this->headersFor($request) + [
                     'Accept' => 'text/event-stream',
                     'Cache-Control' => 'no-cache',
                 ])
@@ -60,8 +75,14 @@ final class SseJsonRpcTransport implements McpTransportContract
             throw new McpTransportException("SSE MCP transport request failed: {$e->getMessage()}", 0, $e);
         }
 
+        $this->captureResponseState($response);
+        $this->assertResponseSize($response->body());
         if ($response->failed()) {
-            throw new McpTransportException("SSE MCP transport returned status {$response->status()}: {$response->body()}");
+            $payload = $response->json();
+            if (is_array($payload) && isset($payload['error'])) {
+                return JsonRpcMessage::fromArray($payload);
+            }
+            throw new McpTransportException("SSE MCP transport returned status {$response->status()}.");
         }
 
         return $this->parseEventStream($response->body(), $request->id);
@@ -74,27 +95,81 @@ final class SseJsonRpcTransport implements McpTransportContract
         }
 
         try {
-            Http::timeout($this->timeoutSeconds())
-                ->withHeaders($this->headers())
+            $this->guardEndpoint();
+            $response = Http::timeout($this->timeoutSeconds())
+                ->withOptions(['allow_redirects' => false])
+                ->withHeaders($this->headersFor($notification))
                 ->asJson()
                 ->post($this->endpoint(), $notification->toArray());
         } catch (\Throwable $e) {
             throw new McpTransportException("SSE MCP transport notify failed: {$e->getMessage()}", 0, $e);
+        }
+
+        // Notifications have no JSON-RPC reply, but the HTTP status still tells us
+        // whether the server accepted them (2xx/202) or rejected them (e.g. 401/404).
+        // Treating a rejected `notifications/initialized` as success would let legacy
+        // negotiation continue against an uninitialized server.
+        $this->captureResponseState($response);
+        $this->assertResponseSize($response->body());
+        if ($response->failed()) {
+            throw new McpTransportException("SSE MCP transport notify returned status {$response->status()}.");
         }
     }
 
     public function isHealthy(): bool
     {
         try {
+            $this->guardEndpoint();
             $base = rtrim((string) $this->config['endpoint'], '/');
             $healthPath = (string) ($this->config['health_path'] ?? '/healthz');
+
             return Http::timeout($this->timeoutSeconds())
                 ->withHeaders($this->headers())
-                ->get($base . $healthPath)
+                ->get($base.$healthPath)
                 ->successful();
         } catch (\Throwable) {
             return false;
         }
+    }
+
+    public function useProtocol(McpProtocolEra $era, string $version): void
+    {
+        $this->protocolEra = $era;
+        $this->protocolVersion = $version;
+        if ($era === McpProtocolEra::Modern) {
+            $this->sessionId = null;
+        }
+    }
+
+    public function protocolEra(): ?McpProtocolEra
+    {
+        return $this->protocolEra;
+    }
+
+    public function protocolVersion(): ?string
+    {
+        return $this->protocolVersion;
+    }
+
+    public function sessionId(): ?string
+    {
+        return $this->sessionId;
+    }
+
+    public function clearSession(): void
+    {
+        $this->sessionId = null;
+    }
+
+    public function lastStatusCode(): ?int
+    {
+        return $this->lastStatusCode;
+    }
+
+    /** @return array<string,list<string>> */
+    public function lastResponseHeaders(): array
+    {
+        return $this->lastResponseHeaders;
     }
 
     /**
@@ -162,6 +237,7 @@ final class SseJsonRpcTransport implements McpTransportContract
                 $data[] = ltrim(substr($line, 5), ' ');
             }
         }
+
         return $data === [] ? null : implode("\n", $data);
     }
 
@@ -171,6 +247,7 @@ final class SseJsonRpcTransport implements McpTransportContract
         if ($endpoint === '') {
             throw new McpTransportException('SSE MCP transport: endpoint is missing from transport config.');
         }
+
         return $endpoint;
     }
 
@@ -178,12 +255,65 @@ final class SseJsonRpcTransport implements McpTransportContract
     private function headers(): array
     {
         $headers = $this->config['headers'] ?? [];
+
         return is_array($headers) ? $headers : [];
+    }
+
+    /** @return array<string,string> */
+    private function headersFor(JsonRpcMessage $message): array
+    {
+        $headers = $this->headers();
+        if ($this->protocolVersion !== null) {
+            $headers['MCP-Protocol-Version'] = $this->protocolVersion;
+        }
+        if ($this->protocolEra === McpProtocolEra::Modern && $message->method !== null) {
+            $headers['Mcp-Method'] = $message->method;
+            $name = $message->params['name'] ?? $message->params['taskId'] ?? null;
+            if (is_string($name) && $name !== '') {
+                $headers['Mcp-Name'] = $name;
+            }
+        }
+        if ($this->protocolEra === McpProtocolEra::Legacy && $this->sessionId !== null) {
+            $headers['Mcp-Session-Id'] = $this->sessionId;
+        }
+
+        return $headers;
+    }
+
+    private function captureResponseState(Response $response): void
+    {
+        $this->lastStatusCode = $response->status();
+        $this->lastResponseHeaders = $response->headers();
+        if ($this->protocolEra !== McpProtocolEra::Legacy) {
+            return;
+        }
+
+        $session = $response->header('Mcp-Session-Id');
+        if (is_string($session) && $session !== '') {
+            $this->sessionId = $session;
+        }
     }
 
     private function timeoutSeconds(): float
     {
         $ms = (int) ($this->config['timeout_ms'] ?? 30_000);
+
         return max(0.5, $ms / 1000);
+    }
+
+    private function guardEndpoint(): void
+    {
+        $guard = $this->config['before_request'] ?? null;
+        if (is_callable($guard)) {
+            $guard($this->endpoint());
+        }
+    }
+
+    private function assertResponseSize(string $body): void
+    {
+        $limit = max(1, (int) ($this->config['max_response_bytes'] ?? 2_000_000));
+        if (strlen($body) > $limit) {
+            throw new McpTransportException('SSE MCP transport response exceeded the configured size limit.');
+        }
     }
 }

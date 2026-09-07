@@ -3,14 +3,13 @@
 namespace Padosoft\AskMyDocsMcpPack\Console;
 
 use Illuminate\Console\Command;
-use Padosoft\AskMyDocsMcpPack\ServerSide\JsonRpcRequestHandler;
 use Padosoft\AskMyDocsMcpPack\ServerSide\StdioRunner;
+use Padosoft\AskMyDocsMcpPack\ServerSide\V2JsonRpcRequestHandler;
 
 /**
- * v1.2.0 — `php artisan mcp-pack:serve` — boots the long-lived stdio
- * loop so the host can be wired as an MCP server in any client that
- * speaks the stdio profile (Claude Desktop, Cursor, VS Code's MCP
- * extension, Cline, …).
+ * `php artisan mcp-pack:serve` boots the MCP 2026-07-28 stdio loop for
+ * a compiled Fluent server. Each message is independently validated;
+ * the process is long-lived only because stdio owns one child process.
  *
  * The artisan command does NOT enforce auth (stdio runs locally). The
  * client process spawns this command via its `command` / `args`
@@ -22,21 +21,21 @@ use Padosoft\AskMyDocsMcpPack\ServerSide\StdioRunner;
  *     "mcpServers": {
  *       "askmydocs": {
  *         "command": "php",
- *         "args": ["/path/to/host/artisan", "mcp-pack:serve"]
+ *         "args": ["/path/to/host/artisan", "mcp-pack:serve", "askmydocs"]
  *       }
  *     }
  *   }
  */
 class McpServeCommand extends Command
 {
-    protected $signature = 'mcp-pack:serve';
+    protected $signature = 'mcp-pack:serve {server? : Fluent local server alias or id}';
 
-    protected $description = 'Run the MCP server-side stdio loop. Hosts expose their tool catalog via McpServerExposureContract.';
+    protected $description = 'Run a Fluent MCP 2026-07-28 server over the stateless stdio request loop.';
 
-    public function handle(JsonRpcRequestHandler $handler): int
+    public function handle(V2JsonRpcRequestHandler $handler): int
     {
         $runner = new StdioRunner($handler);
-        $runner->run();
+        $runner->run(['server_id' => (string) ($this->argument('server') ?: config('mcp-pack.v2.default_server', 'default'))]);
 
         return self::SUCCESS;
     }

@@ -38,13 +38,13 @@ final class RemoteMcpTool implements McpToolContract
     {
         $schema = $this->payload['inputSchema'] ?? $this->payload['input_schema'] ?? $this->payload['parameters'] ?? [];
         if (! is_array($schema)) {
-            return ['type' => 'object', 'properties' => new \stdClass()];
+            return ['type' => 'object', 'properties' => new \stdClass];
         }
         if (! isset($schema['type'])) {
             $schema['type'] = 'object';
         }
         if (! isset($schema['properties'])) {
-            $schema['properties'] = new \stdClass();
+            $schema['properties'] = new \stdClass;
         }
 
         return $schema;
@@ -52,18 +52,21 @@ final class RemoteMcpTool implements McpToolContract
 
     public function isIdempotent(): bool
     {
-        return (bool) ($this->payload['idempotent'] ?? false);
+        return (bool) ($this->payload['annotations']['idempotentHint'] ?? $this->payload['idempotent'] ?? false);
     }
 
     public function isReadOnly(): bool
     {
-        return (bool) ($this->payload['readOnly'] ?? $this->payload['read_only'] ?? false);
+        return (bool) ($this->payload['annotations']['readOnlyHint'] ?? $this->payload['readOnly'] ?? $this->payload['read_only'] ?? false);
     }
 
     public function invoke(array $arguments): mixed
     {
         return $this->invoker
-            ->invoke($this->server, $this->name, $arguments)
+            ->invoke($this->server, $this->name, $arguments, [
+                'read_only' => $this->isReadOnly(),
+                'idempotent' => $this->isIdempotent(),
+            ])
             ->result;
     }
 

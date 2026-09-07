@@ -2,12 +2,13 @@
 
 namespace Padosoft\AskMyDocsMcpPack\ServerSide;
 
+use Padosoft\AskMyDocsMcpPack\Contracts\JsonRpcRequestHandlerContract;
 use Padosoft\AskMyDocsMcpPack\Support\JsonRpcMessage;
 
 /**
- * v1.2.0 — long-lived stdio runner. Reads newline-delimited JSON-RPC
- * messages from STDIN, dispatches each through
- * {@see JsonRpcRequestHandler}, and writes responses to STDOUT
+ * Long-lived stdio runner. Reads newline-delimited JSON-RPC messages
+ * from STDIN, dispatches each through the configured protocol handler,
+ * and writes responses to STDOUT
  * (newline-delimited per the MCP stdio profile).
  *
  * The class is intentionally small so the artisan `mcp-pack:serve`
@@ -29,11 +30,11 @@ use Padosoft\AskMyDocsMcpPack\Support\JsonRpcMessage;
 final class StdioRunner
 {
     /**
-     * @param resource|null $stdin
-     * @param resource|null $stdout
+     * @param  resource|null  $stdin
+     * @param  resource|null  $stdout
      */
     public function __construct(
-        private readonly JsonRpcRequestHandler $handler,
+        private readonly JsonRpcRequestHandlerContract $handler,
         private $stdin = null,
         private $stdout = null,
     ) {
@@ -59,7 +60,7 @@ final class StdioRunner
 
             $response = $this->dispatch($line, $context);
             if ($response !== null) {
-                fwrite($this->stdout, $response->toJson() . "\n");
+                fwrite($this->stdout, $response->toJson()."\n");
                 fflush($this->stdout);
             }
         }
@@ -82,6 +83,7 @@ final class StdioRunner
         }
 
         $message = JsonRpcMessage::fromArray($decoded);
+
         return $this->handler->handle($message, $context);
     }
 }

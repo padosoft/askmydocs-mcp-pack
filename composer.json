@@ -27,12 +27,18 @@
         "illuminate/console": "^11.0|^12.0|^13.0",
         "illuminate/events": "^11.0|^12.0|^13.0",
         "illuminate/http": "^11.0|^12.0|^13.0",
+        "illuminate/filesystem": "^11.0|^12.0|^13.0",
+        "illuminate/queue": "^11.0|^12.0|^13.0",
+        "guzzlehttp/guzzle": "^7.8.2",
+        "opis/json-schema": "^2.6",
         "symfony/process": "^7.0|^8.0"
     },
     "require-dev": {
         "orchestra/testbench": "^9.0|^10.0|^11.0",
         "phpunit/phpunit": "^10.5|^11.0|^12.0",
-        "mockery/mockery": "^1.6"
+        "mockery/mockery": "^1.6",
+        "larastan/larastan": "^3.8",
+        "laravel/pint": "^1.24"
     },
     "autoload": {
         "psr-4": {
@@ -54,6 +60,8 @@
     "minimum-stability": "stable",
     "prefer-stable": true,
     "scripts": {
-        "test": "vendor/bin/phpunit"
+        "test": "vendor/bin/phpunit",
+        "analyse": "vendor/bin/phpstan analyse --memory-limit=1G",
+        "format:check": "vendor/bin/pint --test config/mcp-pack.php src/Adapters src/Apps src/Artifacts src/Auth src/Catalog src/Contracts/V2 src/Facades src/Fluent src/Http/Admin/V2 src/Http/V2 src/Protocol src/Subscriptions src/Tasks src/Validation src/AskMyDocsMcpPackServiceProvider.php src/Console/McpServeCommand.php src/Console/PruneMcpArtifactsCommand.php src/Console/PruneMcpTasksCommand.php src/Console/RecoverMcpTasksCommand.php src/Contracts/JsonRpcRequestHandlerContract.php src/Contracts/McpProtocolAwareTransportContract.php src/Exceptions/McpProtocolException.php src/Exceptions/McpProtocolNegotiationException.php src/Exceptions/McpRemoteErrorException.php src/Http/Admin/ServersController.php src/Models/McpArtifact.php src/Models/McpTask.php src/Models/McpToolCallAudit.php src/Resilience/ResilienceMediator.php src/ServerSide/JsonRpcRequestHandler.php src/ServerSide/StdioRunner.php src/ServerSide/V2JsonRpcRequestHandler.php src/Services/McpClient.php src/Services/McpDiscoveryService.php src/Services/McpHandshakeService.php src/Services/McpToolCallingService.php src/Services/RemoteMcpTool.php src/Services/ToolInvoker.php src/Support/McpCatalogPage.php src/Support/McpNegotiationResult.php src/Support/McpProtocolEra.php src/Support/McpRemoteTask.php src/Support/McpToolResult.php src/Transports/HttpJsonRpcTransport.php src/Transports/SseJsonRpcTransport.php src/Transports/StdioJsonRpcTransport.php database/migrations/2026_08_13_000001_create_mcp_v2_tables.php tests/Feature/Resilience/ResilienceMediatorTest.php tests/Feature/Services/McpClientDualEraTest.php tests/Feature/Services/McpClientResourcesPromptsTest.php tests/Feature/Services/McpHandshakeServiceTest.php tests/Feature/Services/ToolInvokerTest.php tests/Feature/Transports/HttpJsonRpcTransportTest.php tests/Feature/V2 tests/Unit/Services/RemoteMcpToolTest.php tests/Unit/Support/McpRemoteTaskTest.php tests/Unit/V2 tests/Support/FailingTaskHandler.php tests/Support/InputRequiredTaskHandler.php tests/Support/PartialInputTaskHandler.php tests/Support/TestAppFactory.php tests/Fixtures/conformance-server.php tests/TestCase.php"
     }
 }

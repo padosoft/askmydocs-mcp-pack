@@ -2,10 +2,10 @@
 
 namespace Padosoft\AskMyDocsMcpPack\Tests\Unit\Services;
 
-use PHPUnit\Framework\TestCase;
 use Padosoft\AskMyDocsMcpPack\Defaults\InMemoryMcpServer;
 use Padosoft\AskMyDocsMcpPack\Services\RemoteMcpTool;
 use Padosoft\AskMyDocsMcpPack\Services\ToolInvoker;
+use PHPUnit\Framework\TestCase;
 
 class RemoteMcpToolTest extends TestCase
 {
@@ -21,7 +21,7 @@ class RemoteMcpToolTest extends TestCase
             ],
         ];
 
-        $tool = new RemoteMcpTool('kb_search', $payload, $this->server(), new ToolInvoker());
+        $tool = new RemoteMcpTool('kb_search', $payload, $this->server(), new ToolInvoker);
 
         $this->assertSame('kb_search', $tool->name());
         $this->assertSame('Search the KB', $tool->description());
@@ -31,16 +31,16 @@ class RemoteMcpToolTest extends TestCase
 
     public function test_defaults_to_empty_object_schema_when_missing(): void
     {
-        $tool = new RemoteMcpTool('noop', ['name' => 'noop'], $this->server(), new ToolInvoker());
+        $tool = new RemoteMcpTool('noop', ['name' => 'noop'], $this->server(), new ToolInvoker);
 
         $schema = $tool->schema();
         $this->assertSame('object', $schema['type']);
-        $this->assertEquals(new \stdClass(), $schema['properties']);
+        $this->assertEquals(new \stdClass, $schema['properties']);
     }
 
     public function test_idempotent_and_read_only_flags_default_false(): void
     {
-        $tool = new RemoteMcpTool('noop', ['name' => 'noop'], $this->server(), new ToolInvoker());
+        $tool = new RemoteMcpTool('noop', ['name' => 'noop'], $this->server(), new ToolInvoker);
 
         $this->assertFalse($tool->isIdempotent());
         $this->assertFalse($tool->isReadOnly());
@@ -52,7 +52,7 @@ class RemoteMcpToolTest extends TestCase
             'kb_search',
             ['name' => 'kb_search', 'idempotent' => true, 'readOnly' => true],
             $this->server(),
-            new ToolInvoker(),
+            new ToolInvoker,
         );
 
         $this->assertTrue($tool->isIdempotent());

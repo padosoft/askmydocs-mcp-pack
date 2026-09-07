@@ -1,5 +1,7 @@
 <?php
 
+use Padosoft\AskMyDocsMcpPack\Models\McpToolCallAudit;
+
 return [
 
     /*
@@ -45,18 +47,17 @@ return [
     */
     'audit_model' => env(
         'MCP_PACK_AUDIT_MODEL',
-        \Padosoft\AskMyDocsMcpPack\Models\McpToolCallAudit::class,
+        McpToolCallAudit::class,
     ),
 
     /*
     |--------------------------------------------------------------------------
-    | v1.2.0 — Server-side surface
+    | v2 — Server-side surface
     |--------------------------------------------------------------------------
     |
     | The same package can expose THIS Laravel app AS an MCP server so
-    | remote clients (Claude Desktop, Cursor, VS Code, …) can drive
-    | `initialize` / `tools/list` / `tools/call` / `resources/*` /
-    | `prompts/*` against it. Two front-doors:
+    | remote clients can drive the handshake-free MCP 2026-07-28
+    | methods against Fluent server definitions. Two front-doors:
     |
     |   - stdio: `php artisan mcp-pack:serve` — long-lived process
     |     wired by the MCP client via its `command` + `args` config.
@@ -67,9 +68,8 @@ return [
     |     `http.middleware` array. Disabled by default — opt in once
     |     the auth stack is correct.
     |
-    | The host MUST bind `McpServerExposureContract` to publish its
-    | own tool / resource / prompt catalog; the package ships a
-    | `NullMcpServerExposure` default that publishes nothing.
+    | Register definitions through `Mcp::server()`. The legacy
+    | `McpServerExposureContract` remains available only to v1 adapters.
     |
     */
     'server_side' => [
@@ -219,6 +219,87 @@ return [
         // Optional dedicated cache store name (config/cache.php). When
         // null the default app cache is used.
         'cache_store' => env('MCP_PACK_RESILIENCE_CACHE_STORE'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | v2 — stateless MCP 2026-07-28
+    |--------------------------------------------------------------------------
+    */
+    'v2' => [
+        'protocol_version' => '2026-07-28',
+        'default_server' => env('MCP_PACK_V2_DEFAULT_SERVER', 'default'),
+        'cache_store' => env('MCP_PACK_V2_CACHE_STORE'),
+        'structured_text_fallback' => env('MCP_PACK_V2_STRUCTURED_TEXT_FALLBACK', true),
+        'pagination' => [
+            'default_limit' => (int) env('MCP_PACK_V2_PAGE_SIZE', 100),
+            'max_limit' => (int) env('MCP_PACK_V2_MAX_PAGE_SIZE', 500),
+        ],
+        'spec_pins' => [
+            'core' => '594754559cc928eae08e184c74a89508c1235fc2',
+            'apps' => '10195ad91851502134930e9b80ec2c04e277a720',
+            'tasks' => '2c1425d9a288b9b1f489430fe1e00bb392b47e48',
+        ],
+    ],
+
+    'validation' => [
+        'max_schema_bytes' => (int) env('MCP_PACK_SCHEMA_MAX_BYTES', 262144),
+        'max_instance_bytes' => (int) env('MCP_PACK_ARGUMENTS_MAX_BYTES', 1048576),
+        'max_depth' => (int) env('MCP_PACK_JSON_MAX_DEPTH', 64),
+        // Remote $ref values are denied unless their exact lowercase host is listed here.
+        'remote_ref_hosts' => array_values(array_filter(array_map('trim', explode(',', (string) env('MCP_PACK_SCHEMA_REF_HOSTS', ''))))),
+    ],
+
+    'tasks' => [
+        'enabled' => env('MCP_PACK_TASKS_ENABLED', false),
+        'ttl_seconds' => (int) env('MCP_PACK_TASK_TTL', 86400),
+        'poll_interval_ms' => (int) env('MCP_PACK_TASK_POLL_INTERVAL_MS', 1000),
+        'lease_seconds' => (int) env('MCP_PACK_TASK_LEASE_SECONDS', 300),
+        'lease_safety_seconds' => (int) env('MCP_PACK_TASK_LEASE_SAFETY_SECONDS', 30),
+    ],
+
+    'subscriptions' => [
+        'ttl_seconds' => (int) env('MCP_PACK_SUBSCRIPTION_TTL', 3600),
+        'stream_seconds' => (int) env('MCP_PACK_SUBSCRIPTION_STREAM_SECONDS', 30),
+        'poll_ms' => (int) env('MCP_PACK_SUBSCRIPTION_POLL_MS', 250),
+    ],
+
+    'apps' => [
+        'enabled' => env('MCP_PACK_APPS_ENABLED', true),
+        'openai_compatibility' => env('MCP_PACK_APPS_OPENAI_COMPATIBILITY', true),
+        'experimental_download_file' => env('MCP_PACK_APPS_DOWNLOAD_FILE', false),
+    ],
+
+    'artifacts' => [
+        'enabled' => env('MCP_PACK_ARTIFACTS_ENABLED', true),
+        'disk' => env('MCP_PACK_ARTIFACT_DISK', 'local'),
+        'max_bytes' => (int) env('MCP_PACK_ARTIFACT_MAX_BYTES', 26214400),
+        'ttl_seconds' => (int) env('MCP_PACK_ARTIFACT_TTL', 86400),
+        'signed_url_ttl_seconds' => (int) env('MCP_PACK_ARTIFACT_URL_TTL', 300),
+        'embed_below_bytes' => (int) env('MCP_PACK_ARTIFACT_EMBED_BELOW', 65536),
+    ],
+
+    'oauth' => [
+        'enabled' => env('MCP_PACK_OAUTH_RESOURCE_SERVER', false),
+        'resource' => env('MCP_PACK_OAUTH_RESOURCE'),
+        'authorization_servers' => array_values(array_filter(array_map('trim', explode(',', (string) env('MCP_PACK_OAUTH_ISSUERS', ''))))),
+        'scopes_supported' => array_values(array_filter(array_map('trim', explode(',', (string) env('MCP_PACK_OAUTH_SCOPES', ''))))),
+        'required_scopes' => array_values(array_filter(array_map('trim', explode(',', (string) env('MCP_PACK_OAUTH_REQUIRED_SCOPES', ''))))),
+        'metadata_middleware' => ['api'],
+    ],
+
+    'laravel_mcp' => [
+        'enabled' => env('MCP_PACK_LARAVEL_MCP_ADAPTER', false),
+        'minimum_protocol' => '2026-07-28',
+    ],
+
+    'admin_v2' => [
+        'enabled' => env('MCP_PACK_ADMIN_V2_ENABLED', false),
+        'prefix' => env('MCP_PACK_ADMIN_V2_PREFIX', 'api/admin/mcp-pack/v2'),
+        // Host authentication / authorization belongs before the package's
+        // final fail-closed identity guard. The default `api` group alone does
+        // not authenticate callers, so anonymous requests remain forbidden.
+        'middleware' => array_values(array_filter(array_map('trim', explode(',', (string) env('MCP_PACK_ADMIN_V2_MIDDLEWARE', 'api'))))),
     ],
 
 ];

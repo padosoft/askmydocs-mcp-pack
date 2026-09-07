@@ -1,0 +1,36 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AskMyDocs MCP Pack Admin API",
+    "version": "2.0.0",
+    "description": "Tenant-scoped administration for MCP 2026-07-28 servers, Apps, Tasks and immutable artifacts. The v1.5 API remains available at /api/admin/mcp-pack and is deprecated."
+  },
+  "servers": [{"url": "/api/admin/mcp-pack/v2"}],
+  "security": [{"bearerAuth": []}],
+  "paths": {
+    "/capabilities": {"get": {"operationId": "mcpV2Capabilities", "responses": {"200": {"description": "Protocol, server and feature capabilities", "content": {"application/json": {"schema": {"type": "object"}}}}}}},
+    "/apps": {"get": {"operationId": "mcpV2Apps", "responses": {"200": {"description": "Visible MCP Apps", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Collection"}}}}}}},
+    "/tasks": {"get": {"operationId": "mcpV2Tasks", "responses": {"200": {"description": "Visible tasks", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Collection"}}}}}}},
+    "/tasks/{task}": {"parameters": [{"$ref": "#/components/parameters/TaskId"}], "get": {"operationId": "mcpV2Task", "responses": {"200": {"description": "Task", "content": {"application/json": {"schema": {"type": "object"}}}}, "404": {"$ref": "#/components/responses/NotFound"}}}},
+    "/tasks/{task}/input": {"parameters": [{"$ref": "#/components/parameters/TaskId"}], "post": {"operationId": "mcpV2TaskInput", "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["inputResponses"], "properties": {"inputResponses": {"type": "object", "additionalProperties": true}, "requestState": {"type": ["string", "null"]}}}}}}, "responses": {"200": {"description": "Updated task"}, "409": {"description": "Invalid transition or duplicate input conflict"}}}},
+    "/tasks/{task}/cancel": {"parameters": [{"$ref": "#/components/parameters/TaskId"}], "post": {"operationId": "mcpV2TaskCancel", "responses": {"200": {"description": "Cancelled or already-terminal task"}}}},
+    "/artifacts": {
+      "get": {"operationId": "mcpV2Artifacts", "responses": {"200": {"description": "Visible artifacts", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Collection"}}}}}},
+      "post": {"operationId": "mcpV2ArtifactCreate", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ArtifactCreate"}}, "multipart/form-data": {"schema": {"$ref": "#/components/schemas/ArtifactCreate"}}}}, "responses": {"201": {"description": "Immutable artifact created"}, "422": {"description": "Validation, MIME or size error"}}}
+    },
+    "/artifacts/{artifact}": {"parameters": [{"$ref": "#/components/parameters/ArtifactId"}], "get": {"operationId": "mcpV2Artifact", "responses": {"200": {"description": "Artifact metadata"}, "404": {"$ref": "#/components/responses/NotFound"}}}, "delete": {"operationId": "mcpV2ArtifactDelete", "responses": {"204": {"description": "Artifact soft-deleted"}}}},
+    "/artifacts/{artifact}/download": {"parameters": [{"$ref": "#/components/parameters/ArtifactId"}], "get": {"operationId": "mcpV2ArtifactDownload", "responses": {"200": {"description": "Short-lived private download URL", "content": {"application/json": {"schema": {"type": "object", "required": ["url"], "properties": {"url": {"type": "string", "format": "uri"}}}}}}}}}
+  },
+  "components": {
+    "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer"}},
+    "parameters": {
+      "TaskId": {"name": "task", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}},
+      "ArtifactId": {"name": "artifact", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}
+    },
+    "responses": {"NotFound": {"description": "Not found in the authenticated tenant/principal scope"}},
+    "schemas": {
+      "Collection": {"type": "object", "required": ["data"], "properties": {"data": {"type": "array", "items": {"type": "object"}}}},
+      "ArtifactCreate": {"type": "object", "required": ["name", "mimeType"], "properties": {"name": {"type": "string", "maxLength": 180}, "mimeType": {"type": "string", "maxLength": 191}, "content": {"type": "string"}, "contentBase64": {"type": "string", "contentEncoding": "base64"}, "file": {"type": "string", "format": "binary"}, "annotations": {"type": "object", "additionalProperties": true}, "metadata": {"type": "object", "additionalProperties": true}, "ttlSeconds": {"type": "integer", "minimum": 1, "maximum": 604800}}}
+    }
+  }
+}

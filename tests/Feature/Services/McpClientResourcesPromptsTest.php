@@ -4,7 +4,6 @@ namespace Padosoft\AskMyDocsMcpPack\Tests\Feature\Services;
 
 use Padosoft\AskMyDocsMcpPack\Defaults\InMemoryMcpServer;
 use Padosoft\AskMyDocsMcpPack\Services\McpClient;
-use Padosoft\AskMyDocsMcpPack\Support\JsonRpcMessage;
 use Padosoft\AskMyDocsMcpPack\Tests\Support\StubMcpTransport;
 use Padosoft\AskMyDocsMcpPack\Tests\TestCase;
 
@@ -18,7 +17,7 @@ class McpClientResourcesPromptsTest extends TestCase
 
     public function test_list_resources_returns_page_with_cursor(): void
     {
-        $transport = new StubMcpTransport();
+        $transport = $this->modern(new StubMcpTransport);
         $transport->responses['resources/list'] = [
             'resources' => [
                 ['uri' => 'file:///kb/doc-1.md', 'name' => 'Doc 1', 'mimeType' => 'text/markdown'],
@@ -35,9 +34,31 @@ class McpClientResourcesPromptsTest extends TestCase
         $this->assertSame('page2', $page['nextCursor']);
     }
 
+    public function test_list_resources_page_preserves_modern_cache_hints(): void
+    {
+        $transport = $this->modern(new StubMcpTransport);
+        $transport->responses['resources/list'] = [
+            'resources' => [['uri' => 'docs://guide']],
+            'nextCursor' => 'next',
+            'ttlMs' => 1500,
+            'cacheScope' => 'tenant',
+            '_meta' => ['cacheTtlSeconds' => 30, 'revision' => 'r1'],
+        ];
+        McpClient::useTransportResolver(fn () => $transport);
+
+        $page = McpClient::forServer($this->server())->listResourcesPage();
+
+        $this->assertSame('docs://guide', $page->items[0]['uri']);
+        $this->assertSame('next', $page->nextCursor);
+        $this->assertSame(30, $page->cacheTtlSeconds);
+        $this->assertSame(1500, $page->ttlMs);
+        $this->assertSame('tenant', $page->cacheScope);
+        $this->assertSame('r1', $page->meta['revision']);
+    }
+
     public function test_list_all_resources_drains_every_page(): void
     {
-        $transport = new StubMcpTransport();
+        $transport = $this->modern(new StubMcpTransport);
         // The stub only keys by method, so we can't return different
         // bodies per cursor without a richer fake. Use a closure-like
         // approach: feed an envelope with no nextCursor → terminates
@@ -56,7 +77,7 @@ class McpClientResourcesPromptsTest extends TestCase
 
     public function test_list_resources_filters_entries_without_uri(): void
     {
-        $transport = new StubMcpTransport();
+        $transport = $this->modern(new StubMcpTransport);
         $transport->responses['resources/list'] = [
             'resources' => [
                 ['uri' => 'file:///valid.md'],
@@ -75,7 +96,7 @@ class McpClientResourcesPromptsTest extends TestCase
 
     public function test_read_resource_passes_uri_in_params(): void
     {
-        $transport = new StubMcpTransport();
+        $transport = $this->modern(new StubMcpTransport);
         $transport->responses['resources/read'] = [
             'contents' => [
                 ['type' => 'text', 'text' => 'hello world'],
@@ -87,14 +108,14 @@ class McpClientResourcesPromptsTest extends TestCase
 
         $this->assertSame('hello world', $result['contents'][0]['text']);
 
-        $sent = $transport->sentRequests[0];
+        $sent = $transport->sentRequests[1];
         $this->assertSame('resources/read', $sent->method);
         $this->assertSame('file:///kb/x.md', $sent->params['uri']);
     }
 
     public function test_list_prompts_returns_page_with_cursor(): void
     {
-        $transport = new StubMcpTransport();
+        $transport = $this->modern(new StubMcpTransport);
         $transport->responses['prompts/list'] = [
             'prompts' => [
                 ['name' => 'kb_explain', 'description' => 'Explain a KB doc'],
@@ -113,7 +134,7 @@ class McpClientResourcesPromptsTest extends TestCase
 
     public function test_get_prompt_encodes_empty_arguments_as_object(): void
     {
-        $transport = new StubMcpTransport();
+        $transport = $this->modern(new StubMcpTransport);
         $transport->responses['prompts/get'] = [
             'messages' => [
                 ['role' => 'user', 'content' => ['type' => 'text', 'text' => 'hello']],
@@ -123,7 +144,7 @@ class McpClientResourcesPromptsTest extends TestCase
 
         McpClient::forServer($this->server())->getPrompt('zero_arg_prompt');
 
-        $sent = $transport->sentRequests[0];
+        $sent = $transport->sentRequests[1];
         $this->assertSame('zero_arg_prompt', $sent->params['name']);
         // The MCP spec requires `arguments` be a JSON object; empty
         // arguments must encode as {} (stdClass) not [] (array).
@@ -133,7 +154,7 @@ class McpClientResourcesPromptsTest extends TestCase
 
     public function test_get_prompt_passes_name_and_arguments(): void
     {
-        $transport = new StubMcpTransport();
+        $transport = $this->modern(new StubMcpTransport);
         $transport->responses['prompts/get'] = [
             'messages' => [
                 ['role' => 'system', 'content' => ['type' => 'text', 'text' => 'You are a KB explainer.']],
@@ -145,7 +166,7 @@ class McpClientResourcesPromptsTest extends TestCase
         $rendered = McpClient::forServer($this->server())->getPrompt('kb_explain', ['doc_id' => 'doc-1']);
 
         $this->assertCount(2, $rendered['messages']);
-        $sent = $transport->sentRequests[0];
+        $sent = $transport->sentRequests[1];
         $this->assertSame('prompts/get', $sent->method);
         $this->assertSame('kb_explain', $sent->params['name']);
         $this->assertSame(['doc_id' => 'doc-1'], $sent->params['arguments']);
@@ -153,7 +174,7 @@ class McpClientResourcesPromptsTest extends TestCase
 
     public function test_list_resources_returns_empty_on_non_array_payload(): void
     {
-        $transport = new StubMcpTransport();
+        $transport = $this->modern(new StubMcpTransport);
         // package returns the result envelope verbatim; the
         // canonical "empty list" shape is just an empty `resources` key
         $transport->responses['resources/list'] = ['resources' => 'oops-not-an-array'];
@@ -173,5 +194,16 @@ class McpClientResourcesPromptsTest extends TestCase
             tenantId: 'acme',
             transportConfig: ['endpoint' => 'http://stub'],
         );
+    }
+
+    private function modern(StubMcpTransport $transport): StubMcpTransport
+    {
+        $transport->responses['server/discover'] = [
+            'protocolVersion' => McpClient::MODERN_PROTOCOL_VERSION,
+            'capabilities' => [],
+            'serverInfo' => ['name' => 'test-server', 'version' => '2.0.0'],
+        ];
+
+        return $transport;
     }
 }

@@ -3,13 +3,58 @@
 namespace Padosoft\AskMyDocsMcpPack\Tests\Feature\Transports;
 
 use Illuminate\Support\Facades\Http;
+use Padosoft\AskMyDocsMcpPack\Exceptions\McpAuthorizationException;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpTransportException;
 use Padosoft\AskMyDocsMcpPack\Support\JsonRpcMessage;
+use Padosoft\AskMyDocsMcpPack\Support\McpProtocolEra;
 use Padosoft\AskMyDocsMcpPack\Tests\TestCase;
 use Padosoft\AskMyDocsMcpPack\Transports\HttpJsonRpcTransport;
 
 class HttpJsonRpcTransportTest extends TestCase
 {
+    public function test_authentication_failures_are_typed_without_exposing_response_body(): void
+    {
+        Http::fake(['gateway.example.test/rpc' => Http::response('secret login page', 401)]);
+        $transport = new HttpJsonRpcTransport(['endpoint' => 'http://gateway.example.test/rpc']);
+
+        try {
+            $transport->request(JsonRpcMessage::request(1, 'tools/list'));
+            $this->fail('Expected authorization failure.');
+        } catch (McpAuthorizationException $e) {
+            $this->assertSame(401, $e->httpStatus);
+            $this->assertStringContainsString('reauthorization', $e->getMessage());
+            $this->assertStringNotContainsString('secret login page', $e->getMessage());
+        }
+    }
+
+    public function test_oauth_payload_and_challenge_are_classified_before_json_rpc_decode(): void
+    {
+        Http::fake(['gateway.example.test/rpc' => Http::response(
+            ['error' => 'invalid_token', 'error_description' => 'expired'],
+            401,
+            ['WWW-Authenticate' => 'Bearer realm="mcp", error="invalid_token"'],
+        )]);
+        $transport = new HttpJsonRpcTransport(['endpoint' => 'http://gateway.example.test/rpc']);
+
+        try {
+            $transport->request(JsonRpcMessage::request(1, 'tools/list'));
+            $this->fail('Expected authorization failure.');
+        } catch (McpAuthorizationException $e) {
+            $this->assertSame('invalid_token', $e->oauthError);
+            $this->assertSame('Bearer realm="mcp", error="invalid_token"', $e->wwwAuthenticate);
+        }
+    }
+
+    public function test_json_object_without_json_rpc_envelope_is_rejected(): void
+    {
+        Http::fake(['gateway.example.test/rpc' => Http::response(['data' => ['items' => []]], 200)]);
+        $transport = new HttpJsonRpcTransport(['endpoint' => 'http://gateway.example.test/rpc']);
+
+        $this->expectException(McpTransportException::class);
+        $this->expectExceptionMessage('invalid JSON-RPC response envelope');
+        $transport->request(JsonRpcMessage::request(1, 'tools/list'));
+    }
+
     public function test_request_round_trip_parses_response(): void
     {
         Http::fake([
@@ -30,6 +75,8 @@ class HttpJsonRpcTransportTest extends TestCase
 
         $this->assertTrue($response->isResponse());
         $this->assertSame(['ok' => true], $response->result);
+        $this->assertSame('tools/list', $transport->requestMetrics()[0]['method']);
+        $this->assertSame(200, $transport->requestMetrics()[0]['status']);
     }
 
     public function test_request_throws_on_non_2xx(): void
@@ -45,6 +92,31 @@ class HttpJsonRpcTransportTest extends TestCase
         $transport->request(JsonRpcMessage::request(1, 'tools/list'));
     }
 
+    public function test_notify_throws_on_non_2xx(): void
+    {
+        Http::fake([
+            'gateway.example.test/rpc' => Http::response('rejected', 401),
+        ]);
+
+        $transport = new HttpJsonRpcTransport(['endpoint' => 'http://gateway.example.test/rpc']);
+
+        $this->expectException(McpAuthorizationException::class);
+        $this->expectExceptionMessageMatches('/authorization was rejected \(HTTP 401\)/');
+        $transport->notify(JsonRpcMessage::notification('notifications/initialized'));
+    }
+
+    public function test_notify_accepts_2xx_including_202(): void
+    {
+        Http::fake([
+            'gateway.example.test/rpc' => Http::response('', 202),
+        ]);
+
+        $transport = new HttpJsonRpcTransport(['endpoint' => 'http://gateway.example.test/rpc']);
+        $transport->notify(JsonRpcMessage::notification('notifications/initialized'));
+
+        $this->assertSame(202, $transport->lastStatusCode());
+    }
+
     public function test_request_throws_on_non_json_payload(): void
     {
         Http::fake([
@@ -55,6 +127,33 @@ class HttpJsonRpcTransportTest extends TestCase
 
         $this->expectException(McpTransportException::class);
         $transport->request(JsonRpcMessage::request(1, 'tools/list'));
+    }
+
+    public function test_response_size_is_bounded_and_non_json_errors_do_not_echo_the_body(): void
+    {
+        Http::fakeSequence()
+            ->push(str_repeat('x', 33), 200)
+            ->push('secret-upstream-detail', 503);
+
+        $transport = new HttpJsonRpcTransport([
+            'endpoint' => 'http://gateway.example.test/rpc',
+            'max_response_bytes' => 32,
+        ]);
+        try {
+            $transport->request(JsonRpcMessage::request(1, 'tools/list'));
+            $this->fail('Expected the response size guard.');
+        } catch (McpTransportException $e) {
+            $this->assertStringContainsString('size limit', $e->getMessage());
+        }
+
+        $transport = new HttpJsonRpcTransport(['endpoint' => 'http://gateway.example.test/rpc']);
+        try {
+            $transport->request(JsonRpcMessage::request(2, 'tools/list'));
+            $this->fail('Expected the upstream status failure.');
+        } catch (McpTransportException $e) {
+            $this->assertStringContainsString('status 503', $e->getMessage());
+            $this->assertStringNotContainsString('secret-upstream-detail', $e->getMessage());
+        }
     }
 
     public function test_is_healthy_hits_health_path(): void
@@ -77,5 +176,50 @@ class HttpJsonRpcTransportTest extends TestCase
 
         $this->expectException(\InvalidArgumentException::class);
         $transport->request(JsonRpcMessage::notification('progress'));
+    }
+
+    public function test_modern_headers_and_legacy_session_are_exposed(): void
+    {
+        Http::fakeSequence()
+            ->push([
+                'jsonrpc' => '2.0',
+                'id' => 'modern',
+                'result' => ['ok' => true],
+            ], 200)
+            ->push([
+                'jsonrpc' => '2.0',
+                'id' => 'task',
+                'result' => ['resultType' => 'complete', 'taskId' => 'task-123', 'status' => 'working', 'ttlMs' => 60_000],
+            ], 200)
+            ->push([
+                'jsonrpc' => '2.0',
+                'id' => 'init',
+                'result' => ['protocolVersion' => '2025-11-25'],
+            ], 200, ['Mcp-Session-Id' => 'session-123'])
+            ->push([
+                'jsonrpc' => '2.0',
+                'id' => 'list',
+                'result' => ['tools' => []],
+            ], 200);
+
+        $transport = new HttpJsonRpcTransport(['endpoint' => 'https://gateway.example.test/mcp']);
+        $transport->useProtocol(McpProtocolEra::Modern, '2026-07-28');
+        $transport->request(JsonRpcMessage::request('modern', 'tools/call', ['name' => 'search']));
+
+        Http::assertSent(static fn ($request): bool => $request->header('MCP-Protocol-Version') === ['2026-07-28']
+            && $request->header('Mcp-Method') === ['tools/call']
+            && $request->header('Mcp-Name') === ['search']);
+
+        $transport->request(JsonRpcMessage::request('task', 'tasks/get', ['taskId' => 'task-123']));
+        Http::assertSent(static fn ($request): bool => $request->header('Mcp-Method') === ['tasks/get']
+            && $request->header('Mcp-Name') === ['task-123']);
+
+        $transport->useProtocol(McpProtocolEra::Legacy, '2025-11-25');
+        $transport->request(JsonRpcMessage::request('init', 'initialize'));
+        $transport->request(JsonRpcMessage::request('list', 'tools/list'));
+
+        $this->assertSame('session-123', $transport->sessionId());
+        $this->assertSame(200, $transport->lastStatusCode());
+        Http::assertSent(static fn ($request): bool => $request->header('Mcp-Session-Id') === ['session-123']);
     }
 }

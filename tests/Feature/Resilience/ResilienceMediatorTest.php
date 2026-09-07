@@ -5,6 +5,7 @@ namespace Padosoft\AskMyDocsMcpPack\Tests\Feature\Resilience;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
 use Padosoft\AskMyDocsMcpPack\Exceptions\CircuitOpenException;
+use Padosoft\AskMyDocsMcpPack\Exceptions\McpRemoteErrorException;
 use Padosoft\AskMyDocsMcpPack\Exceptions\McpTransportException;
 use Padosoft\AskMyDocsMcpPack\Resilience\CircuitBreaker;
 use Padosoft\AskMyDocsMcpPack\Resilience\Events\RetryAttempted;
@@ -46,7 +47,7 @@ class ResilienceMediatorTest extends TestCase
     {
         $mediator = $this->makeMediator();
 
-        $out = $mediator->execute('t', 's', 'tool', static fn(): array => ['ok' => true]);
+        $out = $mediator->execute('t', 's', 'tool', static fn (): array => ['ok' => true]);
 
         $this->assertSame(['ok' => true], $out);
         $this->assertSame([], $this->sleeps, 'no sleep on success');
@@ -63,6 +64,7 @@ class ResilienceMediatorTest extends TestCase
             if ($attempts < 3) {
                 throw new McpTransportException("fail #{$attempts}");
             }
+
             return ['ok' => true];
         });
 
@@ -133,6 +135,7 @@ class ResilienceMediatorTest extends TestCase
         try {
             $mediator->execute('t', 's', 'tool', static function () use (&$called) {
                 $called++;
+
                 return ['unreachable' => true];
             });
             $this->fail('expected CircuitOpenException');
@@ -164,6 +167,24 @@ class ResilienceMediatorTest extends TestCase
         $this->assertSame(1, $attempts, 'non-transport exception must bubble immediately');
     }
 
+    public function test_remote_json_rpc_errors_are_not_classified_as_transport_or_retried(): void
+    {
+        $mediator = $this->makeMediator(maxAttempts: 3);
+        $attempts = 0;
+
+        try {
+            $mediator->execute('t', 's', 'tool', static function () use (&$attempts): void {
+                $attempts++;
+                throw new McpRemoteErrorException('Business rule rejected the request.', -32000);
+            });
+            $this->fail('Expected remote JSON-RPC error.');
+        } catch (McpRemoteErrorException $e) {
+            $this->assertSame(-32000, $e->rpcCode);
+        }
+
+        $this->assertSame(1, $attempts);
+    }
+
     public function test_breaker_only_does_not_retry_transport_failures(): void
     {
         // MCP_PACK_CB_ENABLED=true + MCP_PACK_RETRY_ENABLED=false
@@ -179,7 +200,7 @@ class ResilienceMediatorTest extends TestCase
             maxAttempts: 5,
             baseBackoffMs: 100,
             maxBackoffMs: 1000,
-            sleep: static fn(int $ms) => null,
+            sleep: static fn (int $ms) => null,
             breakerEnabled: true,
             retryEnabled: false,
         );
@@ -225,7 +246,7 @@ class ResilienceMediatorTest extends TestCase
             maxAttempts: 1,
             baseBackoffMs: 100,
             maxBackoffMs: 1000,
-            sleep: static fn(int $ms) => null,
+            sleep: static fn (int $ms) => null,
             breakerEnabled: false,
             retryEnabled: true,
         );
@@ -242,7 +263,7 @@ class ResilienceMediatorTest extends TestCase
     public function test_circuit_open_exception_forwards_code_and_previous(): void
     {
         $prev = new \RuntimeException('root cause');
-        $e = new \Padosoft\AskMyDocsMcpPack\Exceptions\CircuitOpenException(
+        $e = new CircuitOpenException(
             message: 'open',
             serverId: 's',
             toolName: 'tool',
@@ -271,7 +292,7 @@ class ResilienceMediatorTest extends TestCase
             maxAttempts: 3,
             baseBackoffMs: 100,
             maxBackoffMs: 1000,
-            sleep: static fn(int $ms) => null,
+            sleep: static fn (int $ms) => null,
             breakerEnabled: false,
             retryEnabled: true,
         );

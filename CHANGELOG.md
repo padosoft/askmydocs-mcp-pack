@@ -6,6 +6,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### v2.0.0-rc.1 — MCP 2026-07-28, Fluent API, Apps and artifacts
+
+- Added an autonomous Fluent server API that compiles tools, resources, resource templates, prompts and Apps into immutable, deterministically ordered definitions.
+- Added the stateless MCP `2026-07-28` dispatcher with `server/discover`, mandatory namespaced request metadata, `resultType`, `serverInfo`, cursor pagination, cache hints, subscriptions, progress and cancellation.
+- Added Streamable HTTP header validation and schema-driven `Mcp-Param-*` routing. The legacy server dispatcher remains as a deprecated v1 adapter; v2 HTTP and stdio entrypoints use the new dispatcher.
+- Added discovery-first client negotiation with legacy fallback from `2025-11-25` through `2024-10-07`, Streamable HTTP and historical HTTP+SSE, lossless structured results, Tasks helpers and persistent stdio processes.
+- Added JSON Schema 2020-12 validation with remote `$ref` deny-by-default, size/depth limits and host allowlisting.
+- Added durable Tasks with encrypted payload/result fields, atomic lifecycle transitions, single-use encrypted MRTR state, Laravel Queue execution, cooperative cancellation, worker leases/recovery and pruning commands.
+- Added MCP Apps `2026-01-26`, `ui://` resources, CSP/permission/visibility metadata, optional OpenAI `openai/outputTemplate` compatibility and experimental `ui/download-file` gating.
+- Added immutable private artifacts backed by Flysystem plus `mcp_artifacts`, SHA-256 verification, tenant/principal isolation, `artifact://` reads, embedded-vs-link result selection, signed attachment downloads and pruning.
+- Added host-driven OAuth resource-server contracts, RFC 9728 protected-resource metadata and bearer challenge middleware without requiring Passport.
+- Added `/api/admin/mcp-pack/v2`, OpenAPI 3.1, v2 migrations, protocol/task/artifact audit columns and an optional runtime-guarded `laravel/mcp` adapter.
+- Retry classification now distinguishes remote JSON-RPC errors from transport failures; retries remain limited to transport failures on read-only/idempotent operations.
+- Added real-process stdio conformance coverage and an MCP Inspector 2.2 compatibility probe pinned in CI.
+- Kept the v1.5 REST API and legacy contracts available for the complete v2 lifecycle.
+
 ### v1.5.0 — REST surface extension (W1.D — Resources + Prompts + SSE + OpenAPI)
 
 W1.D ships the final wave of the v1.5 REST extension. Six new

@@ -15,6 +15,96 @@
 > Contracts, multi-turn tool-calling orchestrator, stdio + HTTP transports, audit trail, RBAC hooks.
 > Powers [AskMyDocs](https://github.com/lopadova/AskMyDocs) and reusable in any Laravel AI app.
 
+This is the protocol/runtime package, not AskMyDocs's product connection
+manager. It owns MCP wire compatibility, transports, normalized results and
+server primitives. Shared and personal connections, encrypted OAuth accounts,
+project binding, catalogue governance and the Connected Apps UI belong to
+`padosoft/askmydocs-connector-mcp`, which consumes this package. Keeping that
+boundary avoids two independent connection registries.
+
+## Version 2: Fluent, stateless MCP
+
+Version 2 makes the autonomous Fluent API the primary server surface and speaks MCP `2026-07-28` only. It has no `initialize` handshake or server session: every request carries namespaced protocol metadata, every result carries `resultType` and `serverInfo`, and HTTP routing is validated from `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` and schema-authorized `Mcp-Param-*` headers.
+
+```php
+use Padosoft\AskMyDocsMcpPack\Facades\Mcp;
+use Padosoft\AskMyDocsMcpPack\Fluent\{App, Prompt, Resource, ResourceTemplate, Tool};
+use Padosoft\AskMyDocsMcpPack\Protocol\{CacheScope, McpRequest, McpResult};
+
+Mcp::server('askmydocs')
+    ->name('AskMyDocs')
+    ->version('2.0.0')
+    ->instructions('Search and read the authenticated tenant document set.')
+    ->cache(ttlMs: 300_000, scope: CacheScope::Private)
+    ->tool(
+        Tool::make('search')
+            ->description('Search documents')
+            ->inputSchema([
+                'type' => 'object',
+                'required' => ['query'],
+                'properties' => ['query' => ['type' => 'string', 'minLength' => 1]],
+            ])
+            ->outputSchema([
+                'type' => 'object',
+                'properties' => ['hits' => ['type' => 'array']],
+            ])
+            ->readOnly()
+            ->idempotent()
+            ->app('ui://documents/viewer')
+            ->handle(SearchDocuments::class)
+    )
+    ->resource(Resource::make('docs://guide')->mimeType('text/markdown')->handle(ReadGuide::class))
+    ->resourceTemplate(ResourceTemplate::make('docs://{slug}')->handle(ReadDocument::class))
+    ->prompt(Prompt::make('summarize')->handle(SummarizePrompt::class))
+    ->app(
+        App::make('document-viewer')
+            ->resource('ui://documents/viewer')
+            ->view('mcp.document-viewer')
+            ->csp(['connectDomains' => [], 'resourceDomains' => []])
+    )
+    ->web('/mcp', middleware: ['auth:mcp'])
+    ->local('askmydocs');
+```
+
+Handlers may receive validated arguments or the richer `McpRequest`. Return a string, array, or `McpResult`:
+
+```php
+final class SearchDocuments
+{
+    public function handle(McpRequest $request): McpResult
+    {
+        $hits = Document::query()
+            ->where('tenant_id', $request->tenantId)
+            ->search($request->argument('query'))
+            ->limit(20)
+            ->get();
+
+        return McpResult::structured(['hits' => $hits->toArray()]);
+    }
+}
+```
+
+Closures are supported for synchronous handlers. Async tools use `->asTask()` and must use a serializable class-string handler. Publish/migrate the package tables before enabling Tasks or artifacts:
+
+```bash
+php artisan vendor:publish --tag=mcp-pack-config
+php artisan vendor:publish --tag=mcp-pack-migrations
+php artisan migrate
+```
+
+The v2 client tries `2026-07-28` discovery first, then negotiates legacy revisions from `2025-11-25` back through `2024-10-07`. It supports both Streamable HTTP and historical HTTP+SSE without treating authentication, TLS, DNS or network failures as version mismatches. The v1.5 admin API remains at `/api/admin/mcp-pack`; the v2 API is independently enabled at `/api/admin/mcp-pack/v2`.
+
+Detailed guides:
+
+- [Migration v1 → v2](docs/migration-v1-to-v2.md)
+- [Protocol and stateless deployment](docs/protocol-v2.md)
+- [Tasks and MRTR](docs/tasks-mrtr.md)
+- [MCP Apps and artifacts](docs/apps-artifacts.md)
+- [OAuth and security](docs/security-oauth.md)
+- [Optional laravel/mcp adapter](docs/laravel-mcp-adapter.md)
+
+Normative references: [MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28/changelog), [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview), [Tasks](https://modelcontextprotocol.io/extensions/tasks/overview), and the [official OpenAI MCP UI guide](https://developers.openai.com/plugins/build/chatgpt-ui).
+
 ---
 
 ## 🚀 AI vibe-coding pack included
@@ -95,12 +185,15 @@ so the next Laravel AI app does not have to reinvent it.
 
 | ✓ | Capability                                                                                                 |
 | - | ---------------------------------------------------------------------------------------------------------- |
-| 🔌 | **Two transports out of the box** — `stdio` (Symfony Process) and `http` (Guzzle via Laravel HTTP client). |
+| 🔌 | **MCP 2026-07-28** — stateless Streamable HTTP, persistent stdio legacy client, discovery-first negotiation. |
+| 🧱 | **Fluent server API** — immutable compiled definitions, deterministic snapshots, dynamic tenant-scoped upsert/remove. |
+| 🖼️ | **MCP Apps + artifacts** — `ui://`, sandbox metadata, private Flysystem storage, embedded/link output. |
+| ⏳ | **Tasks + MRTR** — durable Queue jobs, encrypted continuation state, input/cancel/recovery lifecycle. |
 | 🧠 | **Multi-turn tool-calling orchestrator** — bounded by `max_iterations`, with deterministic message reshaping. |
 | 🛡️ | **Tenant-scoped tool catalog** — `forTenant($id)` filters by tenant; cross-tenant leakage is structurally impossible. |
 | 🚦 | **Per-call RBAC** — `McpToolAuthorizerContract` gates every tool BEFORE it appears in the catalog. |
 | 🧾 | **Hash-only audit trail** — `mcp_tool_call_audit` rows store SHA-256 of input + result, NOT raw payloads. |
-| 🔄 | **Cached handshakes** — `initialize` + `tools/list` are cached per (tenant, server) for 5 min by default. |
+| 🔄 | **Scoped cache hints** — `ttlMs`/`cacheScope`, private keys isolated by tenant and principal. |
 | 🧪 | **Stub-friendly tests** — `McpClient::useTransportResolver()` swaps the transport with a one-line closure. |
 | 📦 | **Zero-AI-SDK lock-in** — pluggable host bridge; works with any provider. |
 | 📊 | **Production telemetry** — every tool call carries `duration_ms`, status, and error excerpt. |
@@ -457,6 +550,28 @@ need to expose an **in-process** tool with no upstream MCP server
 | `handshake.ttl_seconds`                  | `MCP_PACK_HANDSHAKE_TTL`               | `300`   | How long to cache `initialize` + `tools/list`.   |
 | `audit_model`                            | `MCP_PACK_AUDIT_MODEL`                 | `McpToolCallAudit::class` | Override to subclass the audit model. |
 
+Primary v2 settings:
+
+| Key | Env var | Default | Purpose |
+| --- | --- | --- | --- |
+| `server_side.http.enabled` | `MCP_PACK_SERVER_HTTP_ENABLED` | `false` | Register the stateless Streamable HTTP endpoint. |
+| `server_side.http.prefix` | `MCP_PACK_SERVER_HTTP_PREFIX` | `mcp` | Package-managed v2 HTTP path. |
+| `v2.default_server` | `MCP_PACK_V2_DEFAULT_SERVER` | `default` | Fluent server selected by the package route. |
+| `v2.cache_store` | `MCP_PACK_V2_CACHE_STORE` | app default | Shared catalog, subscription and cancellation cache. |
+| `validation.remote_ref_hosts` | `MCP_PACK_SCHEMA_REF_HOSTS` | empty | Exact hosts allowed for external JSON Schema `$ref`; all others are blocked. |
+| `tasks.enabled` | `MCP_PACK_TASKS_ENABLED` | `false` | Advertise and execute durable Queue-backed Tasks once operational. |
+| `apps.enabled` | `MCP_PACK_APPS_ENABLED` | `true` | Expose capability-gated `ui://` App resources. |
+| `apps.openai_compatibility` | `MCP_PACK_APPS_OPENAI_COMPATIBILITY` | `true` | Emit the OpenAI output-template alias. |
+| `apps.experimental_download_file` | `MCP_PACK_APPS_DOWNLOAD_FILE` | `false` | Enable pinned draft `ui/download-file` metadata. |
+| `artifacts.enabled` | `MCP_PACK_ARTIFACTS_ENABLED` | `true` | Enable private immutable artifacts and signed downloads. |
+| `artifacts.disk` | `MCP_PACK_ARTIFACT_DISK` | `local` | Private Flysystem disk used for artifact bytes. |
+| `artifacts.max_bytes` | `MCP_PACK_ARTIFACT_MAX_BYTES` | `26214400` | Maximum artifact size (25 MiB). |
+| `oauth.enabled` | `MCP_PACK_OAUTH_RESOURCE_SERVER` | `false` | Enable RFC 9728 resource-server middleware and metadata. |
+| `admin_v2.enabled` | `MCP_PACK_ADMIN_V2_ENABLED` | `false` | Register `/api/admin/mcp-pack/v2`. |
+| `laravel_mcp.enabled` | `MCP_PACK_LARAVEL_MCP_ADAPTER` | `false` | Enable the optional compatibility guard/adapter. |
+
+HTTP and admin entrypoints remain opt-in because the host must supply authentication and authorization middleware before exposing them. Apps and artifact services may be used in-process while their routes remain disabled.
+
 ---
 
 ## Recipes
@@ -669,6 +784,11 @@ under load.
 | `McpHandshakeService`               | Bound via SP                        | Subclass to persist handshakes in a DB column.              |
 | `McpToolCallAudit`                  | Built-in model                      | Subclass + override `mcp-pack.audit_model` config.          |
 | `McpClient::useTransportResolver()` | `null` (uses transport from server) | In tests — swap to a stub transport.                        |
+| `TenantCatalogContract`             | Fluent scoped catalog               | Add/remove tenant/principal definitions dynamically.        |
+| `TaskManagerContract`               | encrypted DB + Laravel Queue         | Replace task persistence/execution while preserving states. |
+| `ArtifactManagerContract`           | private Flysystem + DB metadata      | Replace artifact storage while preserving scope/integrity.  |
+| `AuthenticationResolverContract`    | authenticated Laravel request        | Resolve host-specific tenant, actor and OAuth metadata.      |
+| `SubscriptionBrokerContract`        | shared Laravel cache                 | Use a durable stream/event backend at higher scale.          |
 
 ---
 
@@ -679,7 +799,9 @@ its tests:
 
 ```bash
 composer install
-vendor/bin/phpunit
+composer test
+composer analyse
+composer format:check
 ```
 
 To **test your own host** using the pack's stubs:
@@ -716,7 +838,7 @@ End-to-end Playwright coverage in **AskMyDocs** exercises:
 | 8.4   | 11.x    | ✅ tested in CI     |
 | 8.4   | 12.x    | ✅ tested in CI     |
 | 8.4   | 13.x    | ✅ tested in CI     |
-| 8.5   | 13.x    | ✅ tested in CI     |
+| 8.5   | 11.x–13.x | ✅ tested in CI   |
 
 ---
 
@@ -730,6 +852,7 @@ End-to-end Playwright coverage in **AskMyDocs** exercises:
 | v1.2.0  | ✅ shipped 2026-05-15        | First-class **server-side** — same package exposes a Laravel app AS an MCP server (stdio long-lived runner + HTTP route + `JsonRpcRequestHandler` dispatching `initialize` / `tools/list` / `tools/call` / `resources/*` / `prompts/*` to a host-supplied catalog + auth + RBAC). |
 | v1.3.0  | ✅ shipped 2026-05-15        | Per-tool circuit breaker (`closed` / `open` / `half_open` with TTL recovery) + adaptive retry budget (token-bucket per `(tenant, server)` with exponential backoff capped at `maxBackoffMs`) + 5 telemetry events. Opt-in, default OFF. |
 | v1.4.0  | ✅ shipped 2026-05-15        | **Admin REST backend** — read-mostly routes at `/api/admin/mcp-pack/{servers,audit,circuit-breaker}` registered by the package SP behind `MCP_PACK_ADMIN_ENABLED=true`. Middleware-driven auth (host wires Sanctum + RBAC). **NO React/Vue code** — this is the backend the separate `padosoft/askmydocs-mcp-pack-admin` SPA consumes. CRUD writes deferred to v1.5.0 with a writable registry contract. |
+| v2.0.0-rc.1 | ✅ implemented | MCP `2026-07-28`, Fluent definitions, Streamable HTTP, Tasks/MRTR, Apps, artifacts, OAuth resource-server mode, admin v2 and dual-era client negotiation. |
 | ─       | ─                           | ─ |
 | post-v7.0 cycle | 📅 separate package | **`padosoft/askmydocs-mcp-pack-admin`** — standalone React SPA companion. Same pattern as `padosoft/laravel-flow-admin` / `padosoft/laravel-pii-redactor-admin`. Cross-mountable under `/admin/mcp/` in any Laravel host that depends on this package + v1.4. Ships in its own repo with its own R36 cycle once AskMyDocs's v7.0/W6 host integration is green. |
 
