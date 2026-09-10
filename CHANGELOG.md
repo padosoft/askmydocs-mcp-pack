@@ -6,6 +6,11 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Allow Guzzle 8 alongside Guzzle 7 so hosts can adopt the current HTTP client major without downgrading their dependency graph.
+- Raise only the Testbench development floors to compatible patch lines while retaining Laravel 11, 12 and 13 runtime support.
+
 ### v2.0.0-rc.1 — MCP 2026-07-28, Fluent API, Apps and artifacts
 
 - Added an autonomous Fluent server API that compiles tools, resources, resource templates, prompts and Apps into immutable, deterministically ordered definitions.
